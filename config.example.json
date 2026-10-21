@@ -1,0 +1,31 @@
+{
+  "listen": "127.0.0.1:4185",
+  "origin": "http://127.0.0.1:4185",
+  "local_http": true,
+  "raft_api": "https://api.raft.build",
+  "client_id": "github-work-app-mvp",
+  "server_id": "YOUR_RAFT_SERVER_UUID",
+  "server_slug": "YOUR_RAFT_SERVER_SLUG",
+  "agent_id": "YOUR_RAFT_AGENT_UUID",
+  "github_login": "YOUR_GITHUB_LOGIN",
+  "poll_seconds": 120,
+  "watches": [
+    {
+      "repo": "Project-HAMi/HAMi",
+      "number": 3259
+    }
+  ],
+  "discover_notifications": true,
+  "notify_target": "dm:@your-human",
+  "lookback_hours": 6,
+  "workspace_root": "state/worktrees",
+  "repositories": [
+    {
+      "repo": "Project-HAMi/HAMi",
+      "goal": "核对公开事项的变化并在 Raft 交付有来源依据的调查结论。",
+      "mode": "read-only",
+      "guide_file": "examples/guides/project-hami.md",
+      "task_target": "#your-channel"
+    }
+  ]
+}

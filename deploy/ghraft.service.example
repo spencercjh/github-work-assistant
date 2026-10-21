@@ -1,0 +1,20 @@
+[Unit]
+Description=GitHub work assistant for Raft
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Replace this account and the /opt/ghraft paths with the deployment's owner and paths.
+User=ghraft
+WorkingDirectory=/opt/ghraft
+EnvironmentFile=/opt/ghraft/private/service.env
+ExecStart=/opt/ghraft/bin/ghraft -config /opt/ghraft/config.json serve
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
