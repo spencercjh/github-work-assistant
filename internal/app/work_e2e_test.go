@@ -34,11 +34,17 @@ func fixtureGit(t *testing.T, dir, input string, args ...string) string {
 // The base changes the offset; the PR independently doubles the input. Correct resolution preserves both.
 func conflictHistory(t *testing.T) (string, string, string) {
 	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	repo := filepath.Join(t.TempDir(), "fixture.git")
 	if err := os.Mkdir(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
 	fixtureGit(t, repo, "", "init", "--bare")
+	// Even an uncommitted merge requires an identity. Keep it local to this
+	// synthetic repository instead of depending on the developer's Git config.
+	fixtureGit(t, repo, "", "config", "user.name", "Test Fixture")
+	fixtureGit(t, repo, "", "config", "user.email", "fixture@example.invalid")
 	fixtureGit(t, repo, "", "remote", "add", "origin", "https://github.com/example/fixture.git")
 	makeCommit := func(parent string, files map[string]string) string {
 		var tree strings.Builder

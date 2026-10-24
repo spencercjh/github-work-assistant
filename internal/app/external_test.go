@@ -42,15 +42,25 @@ func TestExternalIdentityBindingAndSecretFiles(t *testing.T) {
 		t.Fatal("missing send scope accepted")
 	}
 	path := filepath.Join(t.TempDir(), "token")
-	os.WriteFile(path, []byte("sk_agent_local_fixture"), 0644)
+	if err := os.WriteFile(path, []byte("sk_agent_local_fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// chmod establishes the insecure fixture even when the caller uses umask 077.
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ReadPrivateFile(path); err == nil {
 		t.Fatal("public token file accepted")
 	}
-	os.Chmod(path, 0600)
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ReadPrivateFile(path); err != nil {
 		t.Fatal(err)
 	}
-	os.Symlink(path, path+".link")
+	if err := os.Symlink(path, path+".link"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ReadPrivateFile(path + ".link"); err == nil {
 		t.Fatal("symlink credential accepted")
 	}
