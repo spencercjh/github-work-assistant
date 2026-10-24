@@ -240,7 +240,8 @@ func notificationWatch(row map[string]any, c Config) (Watch, bool) {
 	return w, true
 }
 func (g GH) Discover(ctx context.Context, since string) ([]Watch, string, error) {
-	rows, e := g.pages(ctx, "notifications?all=true&per_page=100&since="+url.QueryEscape(since), "")
+	// Notifications supports at most 50 items per page; g.pages follows all pages.
+	rows, e := g.pages(ctx, "notifications?all=true&per_page=50&since="+url.QueryEscape(since), "")
 	if e != nil {
 		return nil, "", e
 	}
