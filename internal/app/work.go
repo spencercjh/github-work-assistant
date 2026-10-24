@@ -147,7 +147,7 @@ func (s *Service) RecordWorkResult(ctx context.Context, in WorkResult) error {
 	if in.Outcome == "changes-ready" && w.Guide.Mode != "local-edit" {
 		return ErrWorkDenied
 	}
-	return s.Store.SaveWorkResult(ctx, w.Event.Key, in, w.Guide)
+	return s.Store.SaveWorkResult(ctx, w.Event.Key, in)
 }
 
 func (s *Service) registerWorkActions(m *http.ServeMux) {

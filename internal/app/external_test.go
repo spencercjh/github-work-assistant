@@ -146,6 +146,14 @@ func TestExternalDeliverySurvivesLostResponseAndRestart(t *testing.T) {
 	if attempts != 5 {
 		t.Fatal("unexpected sends", attempts)
 	}
+	r.Config.DeliveryTarget = c.DeliveryTarget
+	accepted := []byte(`{"ok":true,"state":"committed","messageId":"11111111-1111-1111-1111-111111111111"}`)
+	if err := reopened.Delivery(ctx, id, accepted, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Send(ctx, events[0]); err != nil || attempts != 5 {
+		t.Fatal("accepted event was resent after request cleanup", attempts, err)
+	}
 }
 
 func TestLocalTriageKeepsDestinationAndAccessBoundary(t *testing.T) {

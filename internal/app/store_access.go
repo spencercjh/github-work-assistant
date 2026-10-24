@@ -13,14 +13,20 @@ func (s *Store) SchemaReady(ctx context.Context) error {
 			return errors.New("database schema is incomplete; run migrate")
 		}
 	}
+	for _, column := range []struct{ table, name string }{
+		{"ghraft_events", "accepted_at"}, {"ghraft_events", "compacted_at"},
+		{"ghraft_results", "body_hash"}, {"ghraft_results", "body_pruned"},
+		{"ghraft_triage", "body_hash"}, {"ghraft_triage", "body_pruned"},
+		{"ghraft_legacy_history", "created_at"}, {"ghraft_legacy_history", "body_pruned"},
+	} {
+		if !s.db.Session(ctx).Migrator().HasColumn(column.table, column.name) {
+			return errors.New("database schema is outdated; run migrate")
+		}
+	}
 	return nil
 }
 func (s *Store) ResetDelivery(ctx context.Context, key string) error {
 	return s.db.Session(ctx).Model(&eventRecord{}).Where("state = ? AND resource_key = ?", "pending", key).UpdateColumn("next_attempt", 0).Error
-}
-func (s *Store) InsertMeta(ctx context.Context, key, value string) error {
-	err := s.db.Upsert(ctx, &metaRecord{key, value}, []string{"name"}, nil)
-	return err
 }
 func (s *Store) RegisterAccess(ctx context.Context, key, source string) error {
 	var updates []string

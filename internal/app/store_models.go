@@ -41,16 +41,20 @@ type metaRecord struct {
 func (metaRecord) TableName() string { return "ghraft_meta" }
 
 type legacyRecord struct {
-	Marker string `gorm:"size:160;primaryKey"`
-	Body   string `gorm:"size:16777215;not null"`
+	Marker     string `gorm:"size:160;primaryKey"`
+	Body       string `gorm:"size:16777215;not null"`
+	CreatedAt  int64  `gorm:"not null;default:0;autoCreateTime:false"`
+	BodyPruned bool   `gorm:"not null;default:false"`
 }
 
 func (legacyRecord) TableName() string { return "ghraft_legacy_history" }
 
 type triageRecord struct {
-	EventID   string `gorm:"size:64;primaryKey"`
-	Body      string `gorm:"type:text;not null"`
-	CreatedAt int64  `gorm:"not null;autoCreateTime:false"`
+	BodyHash   string `gorm:"size:64;not null;default:''"`
+	BodyPruned bool   `gorm:"not null;default:false"`
+	EventID    string `gorm:"size:64;primaryKey"`
+	Body       string `gorm:"type:text;not null"`
+	CreatedAt  int64  `gorm:"not null;autoCreateTime:false"`
 }
 
 func (triageRecord) TableName() string { return "ghraft_triage" }
@@ -65,6 +69,8 @@ type snapshotRecord struct {
 func (snapshotRecord) TableName() string { return "ghraft_snapshots" }
 
 type eventRecord struct {
+	AcceptedAt  int64   `gorm:"not null;default:0"`
+	CompactedAt int64   `gorm:"not null;default:0"`
 	EventID     string  `gorm:"size:64;primaryKey"`
 	ResourceKey string  `gorm:"size:240;not null"`
 	VersionHash string  `gorm:"size:64;not null"`
@@ -87,10 +93,12 @@ type secretRecord struct {
 func (secretRecord) TableName() string { return "ghraft_private" }
 
 type resultRecord struct {
-	EventID   string `gorm:"size:64;primaryKey"`
-	ReportID  string `gorm:"size:160;primaryKey"`
-	Body      string `gorm:"size:16777215;not null"`
-	CreatedAt int64  `gorm:"not null;autoCreateTime:false"`
+	BodyHash   string `gorm:"size:64;not null;default:''"`
+	BodyPruned bool   `gorm:"not null;default:false"`
+	EventID    string `gorm:"size:64;primaryKey"`
+	ReportID   string `gorm:"size:160;primaryKey"`
+	Body       string `gorm:"size:16777215;not null"`
+	CreatedAt  int64  `gorm:"not null;autoCreateTime:false"`
 }
 
 func (resultRecord) TableName() string { return "ghraft_results" }

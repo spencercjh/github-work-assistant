@@ -9,6 +9,7 @@
   "agent_id": "YOUR_RAFT_AGENT_UUID",
   "github_login": "YOUR_GITHUB_LOGIN",
   "poll_seconds": 120,
+  "history_retention_days": 30,
   "watches": [
     {
       "repo": "Project-HAMi/HAMi",

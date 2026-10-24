@@ -182,8 +182,8 @@ func TestRepositoryWorkE2E(t *testing.T) {
 	if err != nil || work.Task == nil || work.Task.TaskID != fixtureTask {
 		t.Fatal("task link lost on restart", err)
 	}
-	if len(work.History) != 1 || !bytes.Contains(work.History[0], []byte(`"guide":`)) {
-		t.Fatal("report or historical guidance missing after restart")
+	if len(work.History) != 1 || bytes.Contains(work.History[0], []byte(`"guide":`)) || !bytes.Contains(work.History[0], []byte(`"guide_version":`)) {
+		t.Fatal("report must retain the guide version without duplicating its body")
 	}
 	pending, err := reopened.Unprocessed(ctx)
 	if err != nil || len(pending) != 0 {

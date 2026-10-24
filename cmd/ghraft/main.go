@@ -107,6 +107,20 @@ func run() error {
 	}
 	svc := &app.Service{Config: c, Store: store, Raft: raft, GH: app.GH{Login: c.GitHubLogin, Config: c}}
 	switch command {
+	case "cleanup":
+		f := flag.NewFlagSet(command, flag.ContinueOnError)
+		dryRun := f.Bool("dry-run", false, "Preview expired history and disposable state without changing stored data")
+		if err := f.Parse(flags.Args()[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("unexpected cleanup arguments")
+		}
+		stats, err := store.Cleanup(ctx, c.HistoryRetentionDays, *dryRun)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(stats)
 	case "record-triage":
 		f := flag.NewFlagSet(command, flag.ContinueOnError)
 		var in app.Triage

@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github-raft-app/internal/database"
@@ -45,7 +44,16 @@ func OpenStoreBackend(ctx context.Context, driver, dsn string, key []byte, creat
 	return &Store{db: db, Box: box, LookbackHours: 6}, nil
 }
 func (s *Store) Migrate(ctx context.Context) error {
-	return s.db.Migrate(ctx, &accessRecord{}, &workLinkRecord{}, &watchRecord{}, &metaRecord{}, &legacyRecord{}, &triageRecord{}, &snapshotRecord{}, &eventRecord{}, &secretRecord{}, &resultRecord{})
+	if err := s.db.Migrate(ctx, &accessRecord{}, &workLinkRecord{}, &watchRecord{}, &metaRecord{}, &legacyRecord{}, &triageRecord{}, &snapshotRecord{}, &eventRecord{}, &secretRecord{}, &resultRecord{}); err != nil {
+		return err
+	}
+	// Old records have no acceptance/import time. Start their retention window
+	// at upgrade rather than guessing when delivery or import completed.
+	now := time.Now().Unix()
+	if err := s.db.Session(ctx).Model(&eventRecord{}).Where("state = ? AND accepted_at = 0", "accepted").UpdateColumn("accepted_at", now).Error; err != nil {
+		return err
+	}
+	return s.db.Session(ctx).Model(&legacyRecord{}).Where("created_at = 0").UpdateColumn("created_at", now).Error
 }
 func hash(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 func (s *Store) SaveSecret(ctx context.Context, k string, b []byte, expires int64) error {
@@ -171,32 +179,38 @@ func (s *Store) EventsPage(ctx context.Context, pending bool, offset int) ([]Eve
 	return out, rows.Err()
 }
 func (s *Store) Delivery(ctx context.Context, id string, receipt []byte, success bool, attempts int) error {
-	if success {
-		return s.db.Session(ctx).Model(&eventRecord{}).Where("event_id = ?", id).Updates(map[string]any{"state": "accepted", "receipt": string(receipt), "attempts": gorm.Expr("attempts+1")}).Error
+	tx, _, err := s.eventWrite(ctx, id)
+	if err != nil {
+		return err
 	}
-	delay := min(3600, 30*(1<<min(attempts, 7)))
-	return s.db.Session(ctx).Model(&eventRecord{}).Where("event_id = ?", id).Updates(map[string]any{"attempts": gorm.Expr("attempts+1"), "next_attempt": time.Now().Unix() + int64(delay)}).Error
+	defer tx.Rollback()
+	if success {
+		if !json.Valid(receipt) {
+			return errors.New("invalid delivery receipt")
+		}
+		err = tx.Session(ctx).Model(&eventRecord{}).Where("event_id = ? AND state = ?", id, "pending").Updates(map[string]any{"state": "accepted", "receipt": string(receipt), "accepted_at": time.Now().Unix(), "attempts": gorm.Expr("attempts+1")}).Error
+		if err == nil {
+			err = tx.Session(ctx).Where("name = ?", "external-delivery:"+id).Delete(&metaRecord{}).Error
+		}
+	} else {
+		delay := min(3600, 30*(1<<min(attempts, 7)))
+		err = tx.Session(ctx).Model(&eventRecord{}).Where("event_id = ? AND state = ?", id, "pending").Updates(map[string]any{"attempts": gorm.Expr("attempts+1"), "next_attempt": time.Now().Unix() + int64(delay)}).Error
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Result records link evidence to Raft; they never mutate Raft task status.
 func (s *Store) Result(ctx context.Context, id, report string, body []byte) error {
-	var n int
-	if e := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ghraft_events WHERE event_id=?`, id).Scan(&n); e != nil {
-		return e
+	tx, _, err := s.eventWrite(ctx, id)
+	if err != nil {
+		return err
 	}
-	if n != 1 {
-		return errors.New("unknown event")
+	defer tx.Rollback()
+	if err = saveReport(ctx, tx, id, report, body); err != nil {
+		return err
 	}
-	e := s.db.Upsert(ctx, &resultRecord{id, report, string(body), time.Now().Unix()}, []string{"event_id", "report_id"}, nil)
-	if e != nil {
-		return e
-	}
-	var saved string
-	if e = s.db.QueryRowContext(ctx, `SELECT body FROM ghraft_results WHERE event_id=? AND report_id=?`, id, report).Scan(&saved); e != nil {
-		return e
-	}
-	if saved != string(body) {
-		return fmt.Errorf("report id already used with different content")
-	}
-	return nil
+	return tx.Commit()
 }

@@ -10,8 +10,8 @@ import (
 var ErrNotFound = database.ErrNotFound
 
 // Persistence is the application contract. Implementations must preserve atomic
-// observation/outbox writes, immutable reports and delivery envelopes, and stale
-// evidence rejection. It deliberately exposes no SQL connection or transaction.
+// observation/outbox writes, immutable report fingerprints and pending delivery
+// envelopes, and stale evidence rejection. It deliberately exposes no SQL connection or transaction.
 // A non-SQL implementation can satisfy this interface without changing services.
 type Persistence interface {
 	Close() error
@@ -35,7 +35,8 @@ type Persistence interface {
 	Watches(context.Context) ([]Watch, error)
 	Meta(context.Context, string, string) (string, error)
 	PutMeta(context.Context, string, string) error
-	InsertMeta(context.Context, string, string) error
+	PrepareDelivery(context.Context, string, string) (string, json.RawMessage, error)
+	Cleanup(context.Context, int, bool) (CleanupStats, error)
 	CollectionStatus(context.Context, string, error) error
 	RecordTriage(context.Context, Triage) error
 	Unprocessed(context.Context) ([]map[string]any, error)
@@ -50,7 +51,7 @@ type Persistence interface {
 	SetBlocked(context.Context, string, bool) error
 	ReadWork(context.Context, string) (WorkContext, error)
 	BindTask(context.Context, string, WorkInput, string) (TaskLink, error)
-	SaveWorkResult(context.Context, string, WorkResult, RepositoryGuide) error
+	SaveWorkResult(context.Context, string, WorkResult) error
 }
 
 var _ Persistence = (*Store)(nil)

@@ -85,13 +85,12 @@ func (r *Raft) sendExternal(ctx context.Context, ev Event) ([]byte, error) {
 	// Freeze the complete request before the first attempt. A restart or binary
 	// upgrade must retry the identical keyed write after an ambiguous response.
 	envelope, _ := json.Marshal(map[string]any{"identity": r.Config.ExternalAgent, "request": body})
-	name := "external-delivery:" + ev.ID
-	if err = r.Store.InsertMeta(ctx, name, string(envelope)); err != nil {
-		return nil, err
-	}
-	saved, err := r.Store.Meta(ctx, name, "")
+	saved, accepted, err := r.Store.PrepareDelivery(ctx, ev.ID, string(envelope))
 	if err != nil {
 		return nil, err
+	}
+	if len(accepted) > 0 {
+		return accepted, nil
 	}
 	var persisted struct {
 		Identity string         `json:"identity"`

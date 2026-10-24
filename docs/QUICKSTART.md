@@ -66,6 +66,8 @@ state/my-assistant/run doctor
 
 自动发现由 `discover_notifications` 控制；关闭时必须保留至少一个固定关注对象。默认 `poll_seconds=120`，最小 60 秒。程序尚未根据 GitHub `X-Poll-Interval` 动态调整周期，关注对象较多时需结合账号限额增加间隔。
 
+已确认送达且有处理记录的历史正文默认保留 30 天，由 `history_retention_days` 调整。过期后保留去重标识和报告引用；未解决事件、当前快照和任务关联不按此期限删除。可用 `state/assistant/run cleanup --dry-run` 预览，详见[数据保留与清理](STORAGE.md#保存哪些数据)。
+
 需要代码工作时，按[仓库工作指引](REPOSITORY-WORK.md)在本实例的 `repositories` 中配置目标、可信指引和测试命令。默认仅调查；本地修改权限与 GitHub 发布权限分别取得授权。`Project-HAMi` 仓库始终限制为只读。
 
 配置在进程启动时读取。修改配置后先执行 `run check-config`，再重启采集进程。不要直接更换现有安装的发送身份或执行收件人：待发请求已绑定原身份和目标。确需更换时，先处理旧积压并停止旧实例，再建立新实例；新实例会重新观察关注对象。

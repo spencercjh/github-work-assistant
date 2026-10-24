@@ -56,7 +56,7 @@ func (s *Store) BindTask(ctx context.Context, key string, in WorkInput, target s
 	}
 	return TaskLink{in.TaskID, target, in.EventID, in.EvidenceVersion, in.GuideVersion}, nil
 }
-func (s *Store) SaveWorkResult(ctx context.Context, key string, in WorkResult, guide RepositoryGuide) error {
+func (s *Store) SaveWorkResult(ctx context.Context, key string, in WorkResult) error {
 	tx, err := s.db.BeginWrite(ctx, "resource:"+key)
 	if err != nil {
 		return err
@@ -69,20 +69,8 @@ func (s *Store) SaveWorkResult(ctx context.Context, key string, in WorkResult, g
 	if current != in.EvidenceVersion {
 		return ErrStaleWork
 	}
-	body := string(canonical(struct {
-		WorkResult
-		Guide RepositoryGuide `json:"guide"`
-	}{in, guide}))
-	err = tx.Upsert(ctx, &resultRecord{in.EventID, in.ReportID, body, time.Now().Unix()}, []string{"event_id", "report_id"}, nil)
-	if err != nil {
+	if err = saveReport(ctx, tx, in.EventID, in.ReportID, canonical(in)); err != nil {
 		return err
-	}
-	var saved string
-	if err = tx.QueryRowContext(ctx, `SELECT body FROM ghraft_results WHERE event_id=? AND report_id=?`, in.EventID, in.ReportID).Scan(&saved); err != nil {
-		return err
-	}
-	if saved != body {
-		return errors.New("report already recorded with different content")
 	}
 	return tx.Commit()
 }

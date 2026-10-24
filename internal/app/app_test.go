@@ -23,6 +23,16 @@ func TestConfigRestrictsOriginsAndWatches(t *testing.T) {
 		}
 	}
 	check(true)
+	loaded, err := LoadConfig(path)
+	if err != nil || loaded.HistoryRetentionDays != 30 {
+		t.Fatal("default retention missing", err)
+	}
+	c.HistoryRetentionDays = -1
+	check(false)
+	c.HistoryRetentionDays = 3651
+	check(false)
+	c.HistoryRetentionDays = 7
+	check(true)
 	c.Origin = "http://evil.example"
 	check(false)
 	c.Origin = "http://127.0.0.1:4185"

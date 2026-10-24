@@ -20,23 +20,24 @@ type Watch struct {
 	Number int    `json:"number"`
 }
 type Config struct {
-	DatabaseDriver string  `json:"database_driver,omitempty"`
-	RaftMode       string  `json:"raft_mode,omitempty"`
-	ExternalAgent  string  `json:"external_agent_id,omitempty"`
-	DeliveryTarget string  `json:"delivery_target,omitempty"`
-	Listen         string  `json:"listen"`
-	Origin         string  `json:"origin"`
-	RaftAPI        string  `json:"raft_api"`
-	ClientID       string  `json:"client_id"`
-	ServerID       string  `json:"server_id"`
-	ServerSlug     string  `json:"server_slug"`
-	AgentID        string  `json:"agent_id"`
-	GitHubLogin    string  `json:"github_login"`
-	Watches        []Watch `json:"watches"`
-	PollSeconds    int     `json:"poll_seconds"`
-	Discover       bool    `json:"discover_notifications"`
-	NotifyTarget   string  `json:"notify_target"`
-	LookbackHours  int     `json:"lookback_hours"`
+	HistoryRetentionDays int     `json:"history_retention_days,omitempty"`
+	DatabaseDriver       string  `json:"database_driver,omitempty"`
+	RaftMode             string  `json:"raft_mode,omitempty"`
+	ExternalAgent        string  `json:"external_agent_id,omitempty"`
+	DeliveryTarget       string  `json:"delivery_target,omitempty"`
+	Listen               string  `json:"listen"`
+	Origin               string  `json:"origin"`
+	RaftAPI              string  `json:"raft_api"`
+	ClientID             string  `json:"client_id"`
+	ServerID             string  `json:"server_id"`
+	ServerSlug           string  `json:"server_slug"`
+	AgentID              string  `json:"agent_id"`
+	GitHubLogin          string  `json:"github_login"`
+	Watches              []Watch `json:"watches"`
+	PollSeconds          int     `json:"poll_seconds"`
+	Discover             bool    `json:"discover_notifications"`
+	NotifyTarget         string  `json:"notify_target"`
+	LookbackHours        int     `json:"lookback_hours"`
 	// Only local development may use loopback HTTP. Raft API still requires HTTPS.
 	LocalHTTP     bool               `json:"local_http"`
 	Repositories  []RepositoryPolicy `json:"repositories,omitempty"`
@@ -90,6 +91,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if c.PollSeconds == 0 {
 		c.PollSeconds = 120
+	}
+	if c.HistoryRetentionDays == 0 {
+		c.HistoryRetentionDays = 30
+	}
+	if c.HistoryRetentionDays < 1 || c.HistoryRetentionDays > 3650 {
+		return c, errors.New("history_retention_days must be 1..3650")
 	}
 	if c.LookbackHours == 0 {
 		c.LookbackHours = 6

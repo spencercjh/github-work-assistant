@@ -121,7 +121,7 @@ NODE_EXTRA_CA_CERTS=/path/to/private/localhost-tls.crt raft integration invoke -
 ## 已知边界
 
 - 单实例、公开对象与公开 Notifications 自动发现；不支持私有仓库、GitHub OAuth 或 GitHub 写操作。
-- 快照是最近成功采集的上下文；形成结论前 Agent 要复核实时 GitHub。事件保存当次不可变的前后变化；`get-event` 用于读当次依据，`get-context` 用于读最新状态和处理历史。
+- 快照是最近成功采集的上下文；形成结论前 Agent 要复核实时 GitHub。事件在正文保留期内保存当次前后变化；已送达且有处理记录的正文默认在 30 天后精简为带 `body_pruned` 标记的引用与指纹。`get-event` 用于读取保留的当次依据，`get-context` 用于读取最新状态和处理历史。具体期限见[存储文档](STORAGE.md#保存哪些数据)。
 - 不提供跨主机 worker 调度、完整知识检索或多租户隔离。已配置身份是最小访问边界。
 - Raft App 事件接口仍是实验能力，真实上线前需按所用版本验证。
 - 若注册、授权或 hosting 未完成，必须明确标记本地实现与协议测试完成，不能宣称真实端到端完成。

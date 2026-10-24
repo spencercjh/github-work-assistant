@@ -137,25 +137,30 @@ func (s *Store) RecordTriage(ctx context.Context, t Triage) error {
 	if t.Outcome == "notified" && (!uuidRE.MatchString(t.MessageID) || !strings.HasPrefix(t.Target, "dm:@")) {
 		return errors.New("notified requires real DM message UUID and destination")
 	}
-	var n int
-	if e := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ghraft_events WHERE event_id=?`, t.EventID).Scan(&n); e != nil || n != 1 {
-		return errors.New("unknown event")
+	tx, _, err := s.eventWrite(ctx, t.EventID)
+	if err != nil {
+		return err
 	}
+	defer tx.Rollback()
 	b := string(canonical(t))
-	e := s.db.Upsert(ctx, &triageRecord{t.EventID, b, time.Now().Unix()}, []string{"event_id"}, nil)
-	if e != nil {
-		return e
+	err = tx.Upsert(ctx, &triageRecord{EventID: t.EventID, Body: b, BodyHash: hash([]byte(b)), CreatedAt: time.Now().Unix()}, []string{"event_id"}, nil)
+	if err != nil {
+		return err
 	}
-	var existing string
-	e = s.db.QueryRowContext(ctx, `SELECT body FROM ghraft_triage WHERE event_id=?`, t.EventID).Scan(&existing)
-	if e != nil {
-		return e
+	var saved triageRecord
+	if err = tx.Session(ctx).Where("event_id = ?", t.EventID).Take(&saved).Error; err != nil {
+		return err
 	}
-	if existing != b {
+	fingerprint := saved.BodyHash
+	if fingerprint == "" {
+		fingerprint = hash([]byte(saved.Body))
+	}
+	if fingerprint != hash([]byte(b)) {
 		return errors.New("triage already recorded with different content")
 	}
-	return nil
+	return tx.Commit()
 }
+
 func (s *Store) Unprocessed(ctx context.Context) ([]map[string]any, error) {
 	return s.UnprocessedPage(ctx, 0)
 }
@@ -235,7 +240,7 @@ func (s *Store) ImportLegacy(ctx context.Context, c Config, b []byte) error {
 		if marker == "" {
 			return errors.New("missing legacy marker")
 		}
-		if e = tx.Session(ctx).Create(&legacyRecord{marker, string(canonical(row))}).Error; e != nil {
+		if e = tx.Session(ctx).Create(&legacyRecord{Marker: marker, Body: string(canonical(row)), CreatedAt: time.Now().Unix()}).Error; e != nil {
 			return e
 		}
 	}

@@ -196,6 +196,13 @@ print(json.dumps(data))
             (root / "reason").write_text("Synthetic fixture needs no user notification.\n")
             run(cli + ["record-triage", "--event", event, "--outcome", "quiet", "--reason-file", str(root / "reason")])
             assert not run(cli + ["pending"], parse=True)
+
+            preview = run(cli + ["cleanup", "--dry-run"], parse=True)
+            assert preview["dry_run"] and preview["history_retention_days"] == 30
+            assert preview["event_bodies"] == 0, "newly completed event expired immediately"
+            cleaned = run(cli + ["cleanup"], parse=True)
+            assert not cleaned["dry_run"] and cleaned["event_bodies"] == 0
+            assert not run(cli + ["pending"], parse=True)
             status = run(cli + ["status"], parse=True)
             assert status["watches"][0]["last_success"] > 0 and status["pending_delivery"] == 0
             proc = subprocess.Popen(cli + ["serve"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
