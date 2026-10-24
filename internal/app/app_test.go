@@ -30,6 +30,8 @@ func TestConfigRestrictsOriginsAndWatches(t *testing.T) {
 	check(true)
 	c.RaftAPI = "http://127.0.0.1:9999"
 	check(false)
+	c.RaftAPI = c.Origin
+	check(false) // Local App HTTP must never permit a plaintext Raft credential.
 	c.RaftAPI = "https://api.raft.build"
 	c.Watches[0].Repo = "x/../secrets"
 	check(false)

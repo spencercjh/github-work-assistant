@@ -43,6 +43,18 @@ type WorkResult struct {
 var ErrStaleWork = errors.New("work evidence or repository guidance changed; refresh context")
 var ErrWorkDenied = errors.New("resource is outside current authorization")
 
+// RecordTriage is shared by local execution clients. It applies the same
+// destination and watch boundary as the authenticated App action.
+func (s *Service) RecordTriage(ctx context.Context, in Triage) error {
+	if in.Outcome == "notified" && (s.Config.NotifyTarget == "" || in.Target != s.Config.NotifyTarget) {
+		return errors.New("notification destination does not match configuration")
+	}
+	if _, err := s.WorkContext(ctx, in.EventID); err != nil {
+		return err
+	}
+	return s.Store.RecordTriage(ctx, in)
+}
+
 func (s *Service) WorkContext(ctx context.Context, id string) (WorkContext, error) {
 	var w WorkContext
 	if !idRE.MatchString(id) {

@@ -13,10 +13,11 @@ import (
 )
 
 type Raft struct {
-	Config Config
-	Secret string
-	HTTP   *http.Client
-	Store  *Store
+	Config     Config
+	Secret     string
+	Credential string
+	HTTP       *http.Client
+	Store      *Store
 }
 type Identity struct {
 	Subject    string `json:"sub"`
@@ -65,9 +66,12 @@ func (r *Raft) request(ctx context.Context, path string, body any, bearer string
 		return nil, 0, errors.New("Raft transport failed")
 	}
 	defer res.Body.Close()
-	raw, e := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	raw, e := io.ReadAll(io.LimitReader(res.Body, (1<<20)+1))
 	if e != nil {
 		return nil, res.StatusCode, errors.New("Raft response read failed")
+	}
+	if len(raw) > 1<<20 {
+		return nil, res.StatusCode, errors.New("Raft response exceeds 1 MiB")
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return nil, res.StatusCode, fmt.Errorf("Raft HTTP %d", res.StatusCode)
@@ -176,6 +180,9 @@ func containsScope(s, want string) bool {
 	return false
 }
 func (r *Raft) Send(ctx context.Context, e Event) ([]byte, error) {
+	if r.Config.RaftMode == "external" {
+		return r.sendExternal(ctx, e)
+	}
 	token, err := r.Store.Secret(ctx, r.inboundKey())
 	if err != nil {
 		if err = r.AuthorizeEvents(ctx); err != nil {

@@ -18,19 +18,22 @@ type Watch struct {
 	Number int    `json:"number"`
 }
 type Config struct {
-	Listen        string  `json:"listen"`
-	Origin        string  `json:"origin"`
-	RaftAPI       string  `json:"raft_api"`
-	ClientID      string  `json:"client_id"`
-	ServerID      string  `json:"server_id"`
-	ServerSlug    string  `json:"server_slug"`
-	AgentID       string  `json:"agent_id"`
-	GitHubLogin   string  `json:"github_login"`
-	Watches       []Watch `json:"watches"`
-	PollSeconds   int     `json:"poll_seconds"`
-	Discover      bool    `json:"discover_notifications"`
-	NotifyTarget  string  `json:"notify_target"`
-	LookbackHours int     `json:"lookback_hours"`
+	RaftMode       string  `json:"raft_mode,omitempty"`
+	ExternalAgent  string  `json:"external_agent_id,omitempty"`
+	DeliveryTarget string  `json:"delivery_target,omitempty"`
+	Listen         string  `json:"listen"`
+	Origin         string  `json:"origin"`
+	RaftAPI        string  `json:"raft_api"`
+	ClientID       string  `json:"client_id"`
+	ServerID       string  `json:"server_id"`
+	ServerSlug     string  `json:"server_slug"`
+	AgentID        string  `json:"agent_id"`
+	GitHubLogin    string  `json:"github_login"`
+	Watches        []Watch `json:"watches"`
+	PollSeconds    int     `json:"poll_seconds"`
+	Discover       bool    `json:"discover_notifications"`
+	NotifyTarget   string  `json:"notify_target"`
+	LookbackHours  int     `json:"lookback_hours"`
 	// Only local development may use loopback HTTP. Raft API still requires HTTPS.
 	LocalHTTP     bool               `json:"local_http"`
 	Repositories  []RepositoryPolicy `json:"repositories,omitempty"`
@@ -73,6 +76,12 @@ func LoadConfig(path string) (Config, error) {
 	if c.RaftAPI == "" {
 		c.RaftAPI = "https://api.raft.build"
 	}
+	if c.RaftMode == "" {
+		c.RaftMode = "app"
+	}
+	if c.RaftMode != "app" && c.RaftMode != "external" {
+		return c, errors.New("raft_mode must be app or external")
+	}
 	if c.PollSeconds == 0 {
 		c.PollSeconds = 120
 	}
@@ -86,27 +95,38 @@ func LoadConfig(path string) (Config, error) {
 		return c, errors.New("notifications require an explicit DM destination")
 	}
 
-	if c.PollSeconds < 30 {
-		return c, errors.New("poll_seconds must be at least 30")
+	if c.PollSeconds < 60 {
+		return c, errors.New("poll_seconds must be at least 60")
 	}
-	for _, s := range []string{c.ClientID, c.ServerID, c.AgentID, c.GitHubLogin} {
-		if s == "" {
-			return c, errors.New("client, server, agent and GitHub identity must be configured")
+	identities := []string{c.ServerID, c.GitHubLogin}
+	origins := []string{c.RaftAPI}
+	if c.RaftMode == "app" {
+		identities = append(identities, c.ClientID, c.AgentID)
+		origins = append(origins, c.Origin)
+	} else {
+		identities = append(identities, c.ExternalAgent)
+		if !executorTargetRE.MatchString(c.DeliveryTarget) {
+			return c, errors.New("external delivery_target must be dm:@<executor-name>~agent")
 		}
 	}
-	for _, raw := range []string{c.Origin, c.RaftAPI} {
+	for _, s := range identities {
+		if s == "" {
+			return c, errors.New("required Raft and GitHub identities are missing")
+		}
+	}
+	for _, raw := range origins {
 		u, e := url.Parse(raw)
 		if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Trim(u.Path, "/") != "" {
 			return c, errors.New("origins must be absolute URLs without path, credentials or query")
 		}
-		if u.Scheme != "https" && !(raw == c.Origin && c.LocalHTTP && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost")) {
+		if u.Scheme != "https" && !(c.RaftMode == "app" && raw != c.RaftAPI && raw == c.Origin && c.LocalHTTP && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost")) {
 			return c, errors.New("HTTPS required except explicitly enabled local app HTTP")
 		}
 	}
 	c.Origin = strings.TrimRight(c.Origin, "/")
 	c.RaftAPI = strings.TrimRight(c.RaftAPI, "/")
-	if len(c.Watches) == 0 {
-		return c, errors.New("at least one explicit watch required")
+	if len(c.Watches) == 0 && !c.Discover {
+		return c, errors.New("configure at least one watch or enable discover_notifications")
 	}
 	seen := map[string]bool{}
 	for _, w := range c.Watches {
@@ -133,6 +153,12 @@ func LoadConfig(path string) (Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// Private files live beside the instance configuration; explicit environment paths
+// can still select an operator-managed secret store.
+func (c Config) PrivateFile(name string) string {
+	return filepath.Join(c.configDir, "private", name)
 }
 func (c Config) Watch(key string) (Watch, bool) {
 	for _, w := range c.Watches {

@@ -12,26 +12,34 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github-raft-app/internal/app"
+	"github-raft-app/internal/bootstrap"
 )
 
-func readSecret(env string) ([]byte, error) {
+var version = "dev"
+
+func readSecret(env, fallback string) ([]byte, error) {
 	p := os.Getenv(env)
 	if p == "" {
-		return nil, fmt.Errorf("%s is required", env)
+		p = fallback
 	}
-	i, e := os.Stat(p)
-	if e != nil || !i.Mode().IsRegular() || i.Mode().Perm()&0077 != 0 {
-		return nil, fmt.Errorf("%s must name a private regular file (mode 0600)", env)
+	b, err := app.ReadPrivateFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", env, err)
 	}
-	b, e := os.ReadFile(p)
-	return []byte(strings.TrimSpace(string(b))), e
+	return b, nil
 }
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		return bootstrap.Init(os.Args[2:], os.Stdout)
+	}
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Fprintln(os.Stdout, version)
+		return nil
+	}
 	flags := flag.NewFlagSet("ghraft", flag.ContinueOnError)
 	conf := flags.String("config", "config.json", "Configuration path")
 	if e := flags.Parse(os.Args[1:]); e != nil {
@@ -45,15 +53,22 @@ func run() error {
 	if e != nil {
 		return e
 	}
+	if command == "check-config" {
+		fmt.Fprintln(os.Stdout, "configuration is valid")
+		return nil
+	}
 	if command == "manifest" {
+		if c.RaftMode != "app" {
+			return errors.New("manifest is only available in app mode")
+		}
 		s := app.Service{Config: c}
 		return json.NewEncoder(os.Stdout).Encode(s.Manifest())
 	}
-	dsn, e := readSecret("GHRAFT_DSN_FILE")
+	dsn, e := readSecret("GHRAFT_DSN_FILE", c.PrivateFile("dsn"))
 	if e != nil {
 		return e
 	}
-	raw, e := readSecret("GHRAFT_KEY_FILE")
+	raw, e := readSecret("GHRAFT_KEY_FILE", c.PrivateFile("key"))
 	if e != nil {
 		return e
 	}
@@ -75,16 +90,52 @@ func run() error {
 		return store.Migrate(dbctx)
 	}
 	secret := ""
-	if os.Getenv("GHRAFT_CLIENT_SECRET_FILE") != "" {
-		b, e := readSecret("GHRAFT_CLIENT_SECRET_FILE")
+	if c.RaftMode == "app" && os.Getenv("GHRAFT_CLIENT_SECRET_FILE") != "" {
+		b, e := readSecret("GHRAFT_CLIENT_SECRET_FILE", "")
 		if e != nil {
 			return e
 		}
 		secret = string(b)
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
+	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver") {
+		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
+		if err != nil {
+			return err
+		}
+		raft.Credential = string(b)
+	}
 	svc := &app.Service{Config: c, Store: store, Raft: raft, GH: app.GH{Login: c.GitHubLogin, Config: c}}
 	switch command {
+	case "record-triage":
+		f := flag.NewFlagSet(command, flag.ContinueOnError)
+		var in app.Triage
+		f.StringVar(&in.EventID, "event", "", "Captured event ID")
+		f.StringVar(&in.Outcome, "outcome", "", "quiet or notified")
+		reasonFile := f.String("reason-file", "", "UTF-8 file containing the evidence-based reason")
+		f.StringVar(&in.MessageID, "message", "", "Actual full notification message UUID; omit for quiet")
+		f.StringVar(&in.Target, "target", "", "Configured human DM target; omit for quiet")
+		if err := f.Parse(flags.Args()[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("unexpected triage arguments")
+		}
+		reason, err := os.ReadFile(*reasonFile)
+		if err != nil {
+			return err
+		}
+		in.Reason = string(reason)
+		if err = svc.RecordTriage(ctx, in); err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]bool{"recorded": true})
+	case "doctor":
+		checks, err := svc.Doctor(dbctx)
+		if e := json.NewEncoder(os.Stdout).Encode(checks); e != nil {
+			return e
+		}
+		return err
 	case "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
@@ -106,6 +157,9 @@ func run() error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(v)
 	case "authorize-events":
+		if c.RaftMode != "app" {
+			return errors.New("external mode uses its credential directly; no App grant is needed")
+		}
 		return raft.AuthorizeEvents(dbctx)
 	case "collect":
 		c, done := context.WithTimeout(ctx, 10*time.Minute)
@@ -123,7 +177,7 @@ func run() error {
 		// One collector per database. Local lock prevents accidental duplicate local processes.
 		path := os.Getenv("GHRAFT_LOCK_FILE")
 		if path == "" {
-			return errors.New("GHRAFT_LOCK_FILE required for the single-instance service")
+			path = c.PrivateFile("service.lock")
 		}
 		f, e := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 		if e != nil {
@@ -132,6 +186,14 @@ func run() error {
 		defer f.Close()
 		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
 			return errors.New("another local service owns this instance")
+		}
+		if c.RaftMode == "external" {
+			if _, err := raft.ExternalIdentity(dbctx); err != nil {
+				return err
+			}
+			log.Printf("GitHub assistant %s started (external delivery, outbound connections only)", version)
+			svc.Loop(ctx)
+			return nil
 		}
 		server := &http.Server{Addr: c.Listen, Handler: svc.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 		go svc.Loop(ctx)
@@ -148,7 +210,7 @@ func run() error {
 		}
 		return e
 	default:
-		return errors.New("commands: manifest, migrate, collect, events, status, pending, authorize-events, deliver, serve, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree")
+		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree")
 	}
 }
 
