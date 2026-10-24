@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Exercise a fresh installation using a disposable MySQL and local API fixtures.
+"""Exercise a fresh installation using disposable storage and local API fixtures.
 
-No real GitHub or Raft credential is read. Only the database image is downloaded.
+No real GitHub or Raft credential is read. Database images are only used for the optional managed MySQL check.
 The database volume and private temporary directory are deleted on exit.
 """
 import argparse
@@ -9,26 +9,54 @@ import http.server
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import tempfile
 import threading
 import time
+from urllib.parse import parse_qsl, urlsplit
 
 REPO = Path(__file__).resolve().parents[1]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--database", choices=["sqlite","mysql","postgres"], default="sqlite")
+    parser.add_argument("--dsn-file", help="Private disposable server DSN for external-database setup")
     parser.add_argument("--compose-binary", help="Optional standalone Docker Compose executable")
     args = parser.parse_args()
+    if args.dsn_file:
+        path = Path(args.dsn_file)
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+            raise SystemExit("Smoke-test DSN must be a private regular file")
+        dsn = path.read_text().strip()
+        safe = False
+        if args.database == "postgres":
+            try:
+                parsed = urlsplit(dsn)
+                safe = (parsed.scheme in ("postgres", "postgresql")
+                        and parsed.hostname == "127.0.0.1"
+                        and re.fullmatch(r"/[A-Za-z0-9_]+_test", parsed.path) is not None
+                        and not parsed.fragment
+                        and all(k in ("sslmode", "connect_timeout") for k, _ in parse_qsl(parsed.query)))
+            except ValueError:
+                pass
+        elif args.database == "mysql":
+            safe = re.fullmatch(r"[^\r\n]*@tcp\(127\.0\.0\.1:[0-9]+\)/[A-Za-z0-9_]+_test(?:\?[^\r\n]*)?", dsn) is not None
+        if not safe:
+            raise SystemExit("Refusing smoke test: requires a loopback DSN and a dedicated database ending in _test")
     compose = [args.compose_binary] if args.compose_binary else ["docker", "compose"]
-    for tool in ["go", "docker", "openssl"]:
+    managed = args.database == "mysql" and not args.dsn_file
+    for tool in ["go", "openssl"] + (["docker"] if managed else []):
         if not shutil.which(tool):
             raise SystemExit(f"Missing prerequisite: {tool}")
-    subprocess.run(compose + ["version"], check=True, stdout=subprocess.DEVNULL)
+    if managed:
+        subprocess.run(compose + ["version"], check=True, stdout=subprocess.DEVNULL)
     subprocess.run(["make", "build"], cwd=REPO, check=True)
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="ghraft-smoke-") as tmp:
@@ -115,6 +143,9 @@ print(json.dumps(data))
         base = [str(REPO / "bin/ghraft"), "init", "--dir", str(instance), "--raft-token-file", str(root / "token"),
                 "--recipient", "@executor", "--notify", "@owner", "--db-port", str(db_port),
                 "--raft-api", f"https://127.0.0.1:{server.server_port}"]
+        base += ["--database", args.database]
+        if args.dsn_file:
+            base += ["--dsn-file", str(Path(args.dsn_file).resolve())]
         db = compose + ["-f", str(instance / "database.yml")]
         started = False
         proc = None
@@ -130,9 +161,17 @@ print(json.dumps(data))
             key_before = (instance / "private/key").read_bytes()
             run(base, fail=True)
             assert (instance / "private/key").read_bytes() == key_before
-            started = True
-            subprocess.run(db + ["up", "-d", "--wait", "--wait-timeout", "180"], check=True, env=env)
+            if managed:
+                started = True
+                subprocess.run(db + ["up", "-d", "--wait", "--wait-timeout", "180"], check=True, env=env)
+            else:
+                assert not (instance / "database.yml").exists()
             cli = [str(instance / "run")]
+            if args.database == "sqlite":
+                database_path = Path((instance / "private/dsn").read_text().strip())
+                assert not database_path.exists()
+                run(cli + ["doctor"], fail=True)
+                assert not database_path.exists(), "doctor created a database"
             run(cli + ["migrate"])
             assert all(c["ok"] for c in run(cli + ["doctor"], parse=True))
             (instance / "private/raft-token").write_text("sk_agent_invalid_fixture\n")
@@ -165,7 +204,7 @@ print(json.dumps(data))
             run(cli + ["serve"], fail=True)
             proc.terminate()
             assert proc.wait(timeout=15) == 0, "service did not stop gracefully"
-            print("PASS: private init, no overwrite, MySQL migration, diagnostics/auth failure, discovery, delivery, durable processing, restart and service lock; local API fixtures only.")
+            print(f"PASS ({args.database}): private init, no overwrite, migration, diagnostics/auth failure, discovery, delivery, durable processing, restart and service lock; local API fixtures only.")
         finally:
             if proc is not None and proc.poll() is None:
                 proc.terminate()

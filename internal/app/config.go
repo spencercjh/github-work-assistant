@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github-raft-app/internal/database"
 )
 
 type Watch struct {
@@ -18,6 +20,7 @@ type Watch struct {
 	Number int    `json:"number"`
 }
 type Config struct {
+	DatabaseDriver string  `json:"database_driver,omitempty"`
 	RaftMode       string  `json:"raft_mode,omitempty"`
 	ExternalAgent  string  `json:"external_agent_id,omitempty"`
 	DeliveryTarget string  `json:"delivery_target,omitempty"`
@@ -62,6 +65,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	c.configDir, e = filepath.Abs(filepath.Dir(path))
 	if e != nil {
+		return c, e
+	}
+	if _, e = database.Driver(c.DatabaseDriver); e != nil {
 		return c, e
 	}
 	if c.WorkspaceRoot == "" {
@@ -159,6 +165,14 @@ func LoadConfig(path string) (Config, error) {
 // can still select an operator-managed secret store.
 func (c Config) PrivateFile(name string) string {
 	return filepath.Join(c.configDir, "private", name)
+}
+
+func (c Config) DatabaseLocation(dsn string) string {
+	kind, _ := database.Driver(c.DatabaseDriver)
+	if kind == "sqlite" && !filepath.IsAbs(dsn) {
+		return filepath.Join(c.configDir, dsn)
+	}
+	return dsn
 }
 func (c Config) Watch(key string) (Watch, bool) {
 	for _, w := range c.Watches {

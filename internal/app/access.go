@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 )
@@ -13,14 +12,13 @@ func (s *Service) reconcileWatches(ctx context.Context) error {
 		if err := s.Store.RegisterWatch(ctx, w); err != nil {
 			return err
 		}
-		_, err := s.Store.DB.ExecContext(ctx, `INSERT INTO ghraft_watch_access(resource_key,source,blocked) VALUES(?,'explicit',FALSE) ON DUPLICATE KEY UPDATE source='explicit'`, w.Key())
+		err := s.Store.RegisterAccess(ctx, w.Key(), "explicit")
 		if err != nil {
 			return err
 		}
 	}
 	// Imported legacy watches were user-authorized discovery. Current discovery still gates access.
-	_, err := s.Store.DB.ExecContext(ctx, `INSERT IGNORE INTO ghraft_watch_access(resource_key,source,blocked) SELECT resource_key,'discovered',FALSE FROM ghraft_watches`)
-	return err
+	return s.Store.SeedAccess(ctx)
 }
 
 func (s *Service) watchConfigured(ctx context.Context, key string) bool {
@@ -31,8 +29,7 @@ func (s *Service) watchConfigured(ctx context.Context, key string) bool {
 	if !s.Config.Discover {
 		return false
 	}
-	var source string
-	err := s.Store.DB.QueryRowContext(ctx, `SELECT source FROM ghraft_watch_access WHERE resource_key=?`, key).Scan(&source)
+	source, err := s.Store.WatchSource(ctx, key)
 	return err == nil && source == "discovered"
 }
 
@@ -40,15 +37,14 @@ func (s *Service) allowed(ctx context.Context, key string) bool {
 	if !s.watchConfigured(ctx, key) {
 		return false
 	}
-	var blocked bool
-	err := s.Store.DB.QueryRowContext(ctx, `SELECT blocked FROM ghraft_watch_access WHERE resource_key=?`, strings.ToLower(key)).Scan(&blocked)
-	return errors.Is(err, sql.ErrNoRows) || (err == nil && !blocked)
+	blocked, err := s.Store.WatchBlocked(ctx, strings.ToLower(key))
+	return errors.Is(err, ErrNotFound) || (err == nil && !blocked)
 }
 
 func (s *Service) collectWatch(ctx context.Context, w Watch) error {
 	b, err := s.GH.Collect(ctx, w)
 	if errors.Is(err, ErrNotPublic) {
-		_, dbErr := s.Store.DB.ExecContext(ctx, `UPDATE ghraft_watch_access SET blocked=TRUE WHERE resource_key=?`, w.Key())
+		dbErr := s.Store.SetBlocked(ctx, w.Key(), true)
 		return errors.Join(err, dbErr)
 	}
 	if err != nil {
@@ -57,7 +53,7 @@ func (s *Service) collectWatch(ctx context.Context, w Watch) error {
 	if _, err = s.Store.Observe(ctx, w.Key(), b); err != nil {
 		return err
 	}
-	_, err = s.Store.DB.ExecContext(ctx, `UPDATE ghraft_watch_access SET blocked=FALSE WHERE resource_key=?`, w.Key())
+	err = s.Store.SetBlocked(ctx, w.Key(), false)
 	return err
 }
 
@@ -65,7 +61,7 @@ func (s *Service) collectWatch(ctx context.Context, w Watch) error {
 func (s *Service) Pending(ctx context.Context) ([]map[string]any, error) {
 	out := []map[string]any{}
 	for offset := 0; len(out) < 100; offset += 100 {
-		page, err := s.Store.unprocessedPage(ctx, offset)
+		page, err := s.Store.UnprocessedPage(ctx, offset)
 		if err != nil {
 			return nil, err
 		}

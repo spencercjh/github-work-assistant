@@ -172,11 +172,11 @@ func TestRepositoryWorkE2E(t *testing.T) {
 		t.Fatal("conflicting report overwrite accepted")
 	}
 	// Process/store restart retains the link, report and single event.
-	reopened, err := OpenStore(ctx, disposableTestDSN(t), bytes.Repeat([]byte{1}, 32))
+	reopened, err := openTestStore(t, ctx, disposableTestDSN(t), bytes.Repeat([]byte{1}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.DB.Close()
+	defer reopened.db.Close()
 	svc.Store = reopened
 	work, err = svc.WorkContext(ctx, event.ID)
 	if err != nil || work.Task == nil || work.Task.TaskID != fixtureTask {
@@ -219,7 +219,7 @@ func TestRepositoryWorkE2E(t *testing.T) {
 			t.Fatal("GitHub write crossed test boundary", argv)
 		}
 	}
-	t.Log("PASS: gh fixture -> real seekdb/outbox -> trusted guide/task -> real git worktree conflict -> both behavioral tests -> durable report -> restart -> base drift rejection; zero live GitHub calls")
+	t.Log("PASS: gh fixture -> real database/outbox -> trusted guide/task -> real git worktree conflict -> both behavioral tests -> durable report -> restart -> base drift rejection; zero live GitHub calls")
 }
 
 func TestRevokedBacklogDoesNotStarveActiveWork(t *testing.T) {
@@ -230,7 +230,7 @@ func TestRevokedBacklogDoesNotStarveActiveWork(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = store.DB.Exec(`UPDATE ghraft_events SET created_at=1 WHERE event_id=?`, id); err != nil {
+		if _, err = store.db.Exec(`UPDATE ghraft_events SET created_at=1 WHERE event_id=?`, id); err != nil {
 			t.Fatal(err)
 		}
 	}

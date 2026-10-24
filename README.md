@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
   GH[GitHub Notifications / Issue / PR] -->|只读 API| C[本机 Go 采集程序]
-  C --> DB[(本机 MySQL：快照、待发事件、处理记录)]
+  C --> DB[(SQLite / MySQL / PostgreSQL：快照、待发事件、处理记录)]
   C -->|External Agent 消息，出站 HTTPS| R[Raft 执行 Agent]
   R -->|本机 CLI| DB
   R --> U[向用户汇报 / 继续已授权工作]
@@ -15,7 +15,7 @@ flowchart LR
 
 ## 快速开始
 
-在运行 Raft 执行 Agent 的 Linux 电脑上，使用同一个操作系统账号准备 Go 1.24+、GitHub CLI、Docker 和 Compose 插件。用 `gh auth login --hostname github.com` 登录自己的 GitHub 账号。在 Raft 创建一个独立的 External Agent，并取得它的登录 token；另外选择一个已有的执行 Agent。两者不能是同一身份。
+在运行 Raft 执行 Agent 的 Linux 电脑上，使用同一个操作系统账号准备 Go 1.26+ 和 GitHub CLI。默认使用本地 SQLite 文件；选择新建 MySQL 容器时才需要 Docker 和 Compose 插件。用 `gh auth login --hostname github.com` 登录自己的 GitHub 账号。在 Raft 创建一个独立的 External Agent，并取得它的登录 token；另外选择一个已有的执行 Agent。两者不能是同一身份。
 
 ```bash
 gh repo clone spencercjh/github-work-assistant
@@ -23,7 +23,7 @@ cd github-work-assistant
 make setup
 ```
 
-安装向导询问执行 Agent 名称、可选的通知收件人，并隐藏输入 External Agent token。它自动核对身份、生成私有配置和数据库密码、启动独立 MySQL、初始化数据库并执行诊断。已有安装不会被覆盖。
+安装向导先选择存储位置：本地 SQLite、新建 MySQL 容器，或已有 MySQL／seekdb／TiDB／PostgreSQL。随后填写执行 Agent 名称、可选的通知收件人，并隐藏输入 External Agent token。向导核对身份、生成私有配置、初始化表结构并执行诊断。已有安装不会被覆盖。各后端的连接方式和验证范围见[存储配置](docs/STORAGE.md)。
 
 把生成的 `state/assistant/EXECUTOR.md` 路径交给执行 Agent，并明确委托它处理这些通知。然后启动采集：
 
@@ -45,6 +45,7 @@ state/assistant/run serve
 | 需要做什么 | 入口 |
 | --- | --- |
 | 安装、配置、常驻运行、备份和恢复 | [快速部署](docs/QUICKSTART.md) |
+| 选择数据库、配置云数据库连接、扩展持久化实现 | [存储配置与实现](docs/STORAGE.md) |
 | 让执行 Agent 处理通知和保存结果 | [Agent 工作说明](docs/AGENT-WORKFLOW.md) |
 | 仓库操作范围与本地工作命令 | [仓库工作指引](docs/REPOSITORY-WORK.md) |
 | 已有 App 部署的 OAuth／HTTPS 接入 | [App 模式参考](docs/APP-MODE.md) |
@@ -52,10 +53,12 @@ state/assistant/run serve
 
 ```bash
 make check build test
-# 指向一次性测试库，库名必须以 _test 结尾；会清空该库的 ghraft_* 表。
-GHRAFT_TEST_DSN_FILE=/private/path/test-dsn make integration
-# 独立 MySQL + 本机模拟 GitHub/Raft，验证首次安装；结束时删除本次测试卷。
+# 默认测试使用临时 SQLite；服务器测试会清空指定测试库的 ghraft_* 表。
+GHRAFT_TEST_DRIVER=postgres GHRAFT_TEST_DSN_FILE=/private/path/test-dsn make integration
+# 本地 SQLite + 模拟 GitHub/Raft，验证首次安装，不需要 Docker。
 python3 scripts/smoke-setup.py
+# 单独验证新建 MySQL 容器，结束时删除本次测试卷。
+python3 scripts/smoke-setup.py --database mysql
 ```
 
 当前支持单用户、单执行 Agent、单机部署。默认每 120 秒查询 GitHub，尚未实现 Webhook、私有仓库采集、多租户服务或跨主机执行。轮询快照无法保证还原采集间隔内出现后又被删除的内容；幂等写也不能替代执行 Agent 的重复事件检查。

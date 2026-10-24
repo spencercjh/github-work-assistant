@@ -5,7 +5,19 @@ on:
 permissions:
   contents: read
 jobs:
-  test:
+  sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - run: make check build test
+      - name: Fresh SQLite installation without Docker
+        run: python3 scripts/smoke-setup.py --database sqlite
+      - name: Build and exercise the pure-Go SQLite driver
+        run: CGO_ENABLED=0 go test ./internal/database
+  mysql:
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -27,13 +39,49 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - run: make check build test
       - name: Database and delivery integration
         env:
           DB_PORT: ${{ job.services.mysql.ports[3306] }}
         run: |
           umask 077
           printf 'assistant:disposable-test-password@tcp(127.0.0.1:%s)/assistant_test?charset=utf8mb4&timeout=5s\n' "$DB_PORT" > "$RUNNER_TEMP/ghraft-test-dsn"
-          GHRAFT_TEST_DSN_FILE="$RUNNER_TEMP/ghraft-test-dsn" make integration
+          GHRAFT_TEST_DRIVER=mysql GHRAFT_TEST_DSN_FILE="$RUNNER_TEMP/ghraft-test-dsn" make integration
       - name: Fresh installation smoke test
-        run: python3 scripts/smoke-setup.py
+        run: python3 scripts/smoke-setup.py --database mysql
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+        env:
+          POSTGRES_DB: assistant_test
+          POSTGRES_USER: assistant
+          POSTGRES_PASSWORD: disposable-test-password
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd="pg_isready -U assistant -d assistant_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Database and delivery integration
+        env:
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
+        run: |
+          umask 077
+          printf 'postgres://assistant:disposable-test-password@127.0.0.1:%s/assistant_test?sslmode=disable\n' "$DB_PORT" > "$RUNNER_TEMP/ghraft-test-dsn"
+          GHRAFT_TEST_DRIVER=postgres GHRAFT_TEST_DSN_FILE="$RUNNER_TEMP/ghraft-test-dsn" make integration
+      - name: Fresh installation with an existing PostgreSQL database
+        env:
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
+          DB_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$DB_CONTAINER" createdb -U assistant assistant_smoke_test
+          umask 077
+          printf 'postgres://assistant:disposable-test-password@127.0.0.1:%s/assistant_smoke_test?sslmode=disable\n' "$DB_PORT" > "$RUNNER_TEMP/ghraft-smoke-dsn"
+          python3 scripts/smoke-setup.py --database postgres --dsn-file "$RUNNER_TEMP/ghraft-smoke-dsn"

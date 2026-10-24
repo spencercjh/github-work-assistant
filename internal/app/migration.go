@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -82,11 +81,11 @@ func changes(previous, current []byte, now time.Time, lookback int) ([]Change, b
 	return out, true
 }
 func (s *Store) RegisterWatch(ctx context.Context, w Watch) error {
-	_, e := s.DB.ExecContext(ctx, `INSERT IGNORE INTO ghraft_watches(resource_key,repo,number) VALUES(?,?,?)`, w.Key(), w.Repo, w.Number)
+	e := s.db.Upsert(ctx, &watchRecord{ResourceKey: w.Key(), Repo: w.Repo, Number: w.Number}, []string{"resource_key"}, nil)
 	return e
 }
 func (s *Store) Watches(ctx context.Context) ([]Watch, error) {
-	rows, e := s.DB.QueryContext(ctx, `SELECT repo,number FROM ghraft_watches ORDER BY resource_key`)
+	rows, e := s.db.QueryContext(ctx, `SELECT repo,number FROM ghraft_watches ORDER BY resource_key`)
 	if e != nil {
 		return nil, e
 	}
@@ -103,14 +102,14 @@ func (s *Store) Watches(ctx context.Context) ([]Watch, error) {
 }
 func (s *Store) Meta(ctx context.Context, key, defaultValue string) (string, error) {
 	var v string
-	e := s.DB.QueryRowContext(ctx, `SELECT value FROM ghraft_meta WHERE name=?`, key).Scan(&v)
-	if errors.Is(e, sql.ErrNoRows) {
+	e := s.db.QueryRowContext(ctx, `SELECT value FROM ghraft_meta WHERE name=?`, key).Scan(&v)
+	if errors.Is(e, ErrNotFound) {
 		return defaultValue, nil
 	}
 	return v, e
 }
 func (s *Store) PutMeta(ctx context.Context, key, value string) error {
-	_, e := s.DB.ExecContext(ctx, `INSERT INTO ghraft_meta(name,value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)`, key, value)
+	e := s.db.Upsert(ctx, &metaRecord{key, value}, []string{"name"}, []string{"value"})
 	return e
 }
 func (s *Store) CollectionStatus(ctx context.Context, key string, err error) error {
@@ -118,7 +117,7 @@ func (s *Store) CollectionStatus(ctx context.Context, key string, err error) err
 	if err != nil {
 		msg = err.Error()
 	}
-	_, e := s.DB.ExecContext(ctx, `UPDATE ghraft_watches SET last_attempt=?, last_success=CASE WHEN ?='' THEN ? ELSE last_success END,last_error=? WHERE resource_key=?`, time.Now().Unix(), msg, time.Now().Unix(), msg, key)
+	_, e := s.db.ExecContext(ctx, `UPDATE ghraft_watches SET last_attempt=?, last_success=CASE WHEN ?='' THEN ? ELSE last_success END,last_error=? WHERE resource_key=?`, time.Now().Unix(), msg, time.Now().Unix(), msg, key)
 	return e
 }
 
@@ -139,16 +138,16 @@ func (s *Store) RecordTriage(ctx context.Context, t Triage) error {
 		return errors.New("notified requires real DM message UUID and destination")
 	}
 	var n int
-	if e := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM ghraft_events WHERE event_id=?`, t.EventID).Scan(&n); e != nil || n != 1 {
+	if e := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ghraft_events WHERE event_id=?`, t.EventID).Scan(&n); e != nil || n != 1 {
 		return errors.New("unknown event")
 	}
 	b := string(canonical(t))
-	_, e := s.DB.ExecContext(ctx, `INSERT IGNORE INTO ghraft_triage(event_id,body,created_at) VALUES(?,?,?)`, t.EventID, b, time.Now().Unix())
+	e := s.db.Upsert(ctx, &triageRecord{t.EventID, b, time.Now().Unix()}, []string{"event_id"}, nil)
 	if e != nil {
 		return e
 	}
 	var existing string
-	e = s.DB.QueryRowContext(ctx, `SELECT body FROM ghraft_triage WHERE event_id=?`, t.EventID).Scan(&existing)
+	e = s.db.QueryRowContext(ctx, `SELECT body FROM ghraft_triage WHERE event_id=?`, t.EventID).Scan(&existing)
 	if e != nil {
 		return e
 	}
@@ -158,10 +157,10 @@ func (s *Store) RecordTriage(ctx context.Context, t Triage) error {
 	return nil
 }
 func (s *Store) Unprocessed(ctx context.Context) ([]map[string]any, error) {
-	return s.unprocessedPage(ctx, 0)
+	return s.UnprocessedPage(ctx, 0)
 }
-func (s *Store) unprocessedPage(ctx context.Context, offset int) ([]map[string]any, error) {
-	rows, e := s.DB.QueryContext(ctx, `SELECT e.event_id,e.resource_key,e.version_hash,e.state,e.payload FROM ghraft_events e LEFT JOIN ghraft_triage t ON t.event_id=e.event_id WHERE t.event_id IS NULL AND NOT EXISTS(SELECT 1 FROM ghraft_results r WHERE r.event_id=e.event_id) ORDER BY e.created_at,e.event_id LIMIT 100 OFFSET ?`, offset)
+func (s *Store) UnprocessedPage(ctx context.Context, offset int) ([]map[string]any, error) {
+	rows, e := s.db.QueryContext(ctx, `SELECT e.event_id,e.resource_key,e.version_hash,e.state,e.payload FROM ghraft_events e LEFT JOIN ghraft_triage t ON t.event_id=e.event_id WHERE t.event_id IS NULL AND NOT EXISTS(SELECT 1 FROM ghraft_results r WHERE r.event_id=e.event_id) ORDER BY e.created_at,e.event_id LIMIT 100 OFFSET ?`, offset)
 	if e != nil {
 		return nil, e
 	}
@@ -197,13 +196,13 @@ func (s *Store) ImportLegacy(ctx context.Context, c Config, b []byte) error {
 	if json.Unmarshal(b, &in) != nil || in.Source != "github-assistant-pilot-v1" || !strings.EqualFold(in.Login, c.GitHubLogin) || len(in.Watches) == 0 || in.Pending != 0 {
 		return errors.New("invalid import identity or unprocessed legacy batches")
 	}
-	tx, e := s.DB.BeginTx(ctx, nil)
+	tx, e := s.db.BeginWrite(ctx, "legacy-import")
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback()
 	var old string
-	e = tx.QueryRowContext(ctx, `SELECT value FROM ghraft_meta WHERE name='legacy-import' FOR UPDATE`).Scan(&old)
+	e = tx.QueryRowContext(ctx, `SELECT value FROM ghraft_meta WHERE name='legacy-import'`).Scan(&old)
 	fingerprint := hash(b)
 	if e == nil {
 		if old == fingerprint {
@@ -211,7 +210,7 @@ func (s *Store) ImportLegacy(ctx context.Context, c Config, b []byte) error {
 		}
 		return errors.New("legacy import already completed")
 	}
-	if !errors.Is(e, sql.ErrNoRows) {
+	if !errors.Is(e, ErrNotFound) {
 		return e
 	}
 	for _, w := range in.Watches {
@@ -224,10 +223,10 @@ func (s *Store) ImportLegacy(ctx context.Context, c Config, b []byte) error {
 			classification = "private"
 		}
 		body := canonical(Snapshot{watch.Key(), classification, w.Objects})
-		if _, e = tx.ExecContext(ctx, `INSERT IGNORE INTO ghraft_watches(resource_key,repo,number) VALUES(?,?,?)`, watch.Key(), watch.Repo, watch.Number); e != nil {
+		if e = tx.Upsert(ctx, &watchRecord{ResourceKey: watch.Key(), Repo: watch.Repo, Number: watch.Number}, []string{"resource_key"}, nil); e != nil {
 			return e
 		}
-		if _, e = tx.ExecContext(ctx, `INSERT INTO ghraft_snapshots(resource_key,version_hash,body,observed_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE version_hash=VALUES(version_hash),body=VALUES(body),observed_at=VALUES(observed_at)`, watch.Key(), hash(body), string(body), w.Observed); e != nil {
+		if e = tx.Upsert(ctx, &snapshotRecord{watch.Key(), hash(body), string(body), w.Observed}, []string{"resource_key"}, []string{"version_hash", "body", "observed_at"}); e != nil {
 			return e
 		}
 	}
@@ -236,12 +235,12 @@ func (s *Store) ImportLegacy(ctx context.Context, c Config, b []byte) error {
 		if marker == "" {
 			return errors.New("missing legacy marker")
 		}
-		if _, e = tx.ExecContext(ctx, `INSERT INTO ghraft_legacy_history(marker,body) VALUES(?,?)`, marker, string(canonical(row))); e != nil {
+		if e = tx.Session(ctx).Create(&legacyRecord{marker, string(canonical(row))}).Error; e != nil {
 			return e
 		}
 	}
 	for k, v := range map[string]string{"legacy-import": fingerprint, "notifications-cursor": in.Cursor} {
-		if _, e = tx.ExecContext(ctx, `INSERT INTO ghraft_meta(name,value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)`, k, v); e != nil {
+		if e = tx.Upsert(ctx, &metaRecord{k, v}, []string{"name"}, []string{"value"}); e != nil {
 			return e
 		}
 	}
@@ -252,7 +251,7 @@ func (s *Store) ImportLegacy(ctx context.Context, c Config, b []byte) error {
 // A new opinion on the same PR still gets its own event and judgment.
 func (s *Store) History(ctx context.Context, key string) ([]json.RawMessage, error) {
 	out := []json.RawMessage{}
-	rows, e := s.DB.QueryContext(ctx, `SELECT body FROM ghraft_legacy_history WHERE body LIKE ?`, `%"watch":"`+strings.ToLower(key)+`"%`)
+	rows, e := s.db.QueryContext(ctx, `SELECT body FROM ghraft_legacy_history WHERE body LIKE ?`, `%"watch":"`+strings.ToLower(key)+`"%`)
 	if e != nil {
 		return nil, e
 	}
@@ -269,7 +268,7 @@ func (s *Store) History(ctx context.Context, key string) ([]json.RawMessage, err
 	if e != nil {
 		return nil, e
 	}
-	rows, e = s.DB.QueryContext(ctx, `SELECT t.body FROM ghraft_triage t JOIN ghraft_events e ON e.event_id=t.event_id WHERE e.resource_key=? ORDER BY t.created_at DESC LIMIT 20`, key)
+	rows, e = s.db.QueryContext(ctx, `SELECT t.body FROM ghraft_triage t JOIN ghraft_events e ON e.event_id=t.event_id WHERE e.resource_key=? ORDER BY t.created_at DESC LIMIT 20`, key)
 	if e != nil {
 		return nil, e
 	}
@@ -286,7 +285,7 @@ func (s *Store) History(ctx context.Context, key string) ([]json.RawMessage, err
 	if e != nil {
 		return nil, e
 	}
-	rows, e = s.DB.QueryContext(ctx, `SELECT r.body FROM ghraft_results r JOIN ghraft_events e ON e.event_id=r.event_id WHERE e.resource_key=? ORDER BY r.created_at DESC LIMIT 20`, key)
+	rows, e = s.db.QueryContext(ctx, `SELECT r.body FROM ghraft_results r JOIN ghraft_events e ON e.event_id=r.event_id WHERE e.resource_key=? ORDER BY r.created_at DESC LIMIT 20`, key)
 	if e != nil {
 		return nil, e
 	}

@@ -3,7 +3,7 @@
 VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 
 build:
-	go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/ghraft ./cmd/ghraft
+	CGO_ENABLED=0 go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/ghraft ./cmd/ghraft
 
 setup: build
 	bash scripts/setup.sh
@@ -11,7 +11,8 @@ setup: build
 test:
 	go test -race ./...
 
-# Requires a private DSN file for a disposable loopback database ending in _test.
+# Server drivers require a private DSN for a disposable loopback database ending
+# in _test. GHRAFT_TEST_DRIVER=sqlite uses isolated temporary files instead.
 integration:
 	GHRAFT_REQUIRE_DB=1 go test -race -count=1 -v ./...
 

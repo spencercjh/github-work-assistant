@@ -20,7 +20,7 @@ func fixtureOptions(t *testing.T) Options {
 	identity := app.ExternalIdentity{}
 	identity.Agent.ID, identity.Agent.Name, identity.Agent.External = "sender-id", "collector", true
 	identity.Server.ID = "server-id"
-	return Options{Dir: filepath.Join(base, "instance with ' % $ characters"), Executable: executable, Token: []byte("sk_agent_local_fixture"), Identity: identity, GitHubLogin: "fixture-user", Recipient: "@worker", Notify: "@owner", RaftAPI: "https://api.raft.build", Port: 13306}
+	return Options{Database: "mysql", Dir: filepath.Join(base, "instance with ' % $ characters"), Executable: executable, Token: []byte("sk_agent_local_fixture"), Identity: identity, GitHubLogin: "fixture-user", Recipient: "@worker", Notify: "@owner", RaftAPI: "https://api.raft.build", Port: 13306}
 }
 
 func TestInstanceIsPrivateCompleteAndNeverOverwritten(t *testing.T) {
@@ -99,5 +99,61 @@ func TestInvalidSetupLeavesNoPartialInstance(t *testing.T) {
 	o.Notify = "@worker~agent"
 	if err := Write(o); err == nil {
 		t.Fatal("agent notification handle accepted as human")
+	}
+}
+
+func TestSelectableStorageDoesNotProvisionUnwantedDatabase(t *testing.T) {
+	for _, backend := range []string{"sqlite", "mysql", "seekdb", "tidb", "postgres"} {
+		t.Run(backend, func(t *testing.T) {
+			o := fixtureOptions(t)
+			o.Database = backend
+			if backend == "sqlite" {
+				o.SQLitePath = filepath.Join(t.TempDir(), "custom.sqlite")
+			} else {
+				o.DSN = []byte("private operator-provided connection")
+			}
+			if err := Write(o); err != nil {
+				t.Fatal(err)
+			}
+			c, err := app.LoadConfig(filepath.Join(o.Dir, "config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.DatabaseDriver != backend {
+				t.Fatal("driver selection lost")
+			}
+			for _, name := range []string{"database.yml", "private/database.env"} {
+				if _, err := os.Stat(filepath.Join(o.Dir, name)); !os.IsNotExist(err) {
+					t.Fatal("unexpected local server provisioned", name)
+				}
+			}
+			dsn, err := app.ReadPrivateFile(c.PrivateFile("dsn"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if backend == "sqlite" {
+				if string(dsn) != o.SQLitePath {
+					t.Fatal("file location changed")
+				}
+				if _, err := os.Stat(o.SQLitePath); !os.IsNotExist(err) {
+					t.Fatal("init mutated the database")
+				}
+			} else if string(dsn) != string(o.DSN) {
+				t.Fatal("external connection changed")
+			}
+		})
+	}
+	o := fixtureOptions(t)
+	o.Database = "postgres"
+	if err := Write(o); err == nil {
+		t.Fatal("external database accepted without connection")
+	}
+	if _, err := os.Stat(o.Dir); !os.IsNotExist(err) {
+		t.Fatal("failed init left an instance")
+	}
+	o = fixtureOptions(t)
+	o.Database = "unsupported"
+	if err := Write(o); err == nil {
+		t.Fatal("unsupported driver accepted")
 	}
 }

@@ -28,9 +28,8 @@ func (s *Service) Doctor(ctx context.Context) ([]Diagnostic, error) {
 	if err == nil {
 		add("github_identity", "configured GitHub account is authenticated", s.GH.CheckIdentity(ctx))
 	}
-	add("database", "database connection is available", s.Store.DB.PingContext(ctx))
-	var count int
-	err = s.Store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM ghraft_meta`).Scan(&count)
+	add("database", "database connection is available", s.Store.Ping(ctx))
+	err = s.Store.SchemaReady(ctx)
 	if err != nil {
 		err = errors.New("database schema is unavailable; run migrate first")
 	}

@@ -117,11 +117,11 @@ func TestExternalDeliverySurvivesLostResponseAndRestart(t *testing.T) {
 	if _, err := r.Send(ctx, events[0]); err == nil {
 		t.Fatal("lost response considered delivered")
 	}
-	reopened, err := OpenStore(ctx, disposableTestDSN(t), []byte(strings.Repeat("\x01", 32)))
+	reopened, err := openTestStore(t, ctx, disposableTestDSN(t), []byte(strings.Repeat("\x01", 32)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.DB.Close()
+	defer reopened.db.Close()
 	r.Store = reopened
 	r.Config.configDir = "/a/new/build/location" // persisted request must win over updated formatting
 	if _, err := r.Send(ctx, events[0]); err != nil {

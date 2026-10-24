@@ -4,7 +4,7 @@ import "context"
 
 func (s *Store) Status(ctx context.Context) (map[string]any, error) {
 	out := map[string]any{}
-	rows, e := s.DB.QueryContext(ctx, `SELECT resource_key,last_attempt,last_success,COALESCE(last_error,'') FROM ghraft_watches ORDER BY resource_key`)
+	rows, e := s.db.QueryContext(ctx, `SELECT resource_key,last_attempt,last_success,COALESCE(last_error,'') FROM ghraft_watches ORDER BY resource_key`)
 	if e != nil {
 		return nil, e
 	}
@@ -26,7 +26,7 @@ func (s *Store) Status(ctx context.Context) (map[string]any, error) {
 	out["watches"] = watches
 	for name, q := range map[string]string{"pending_delivery": `SELECT COUNT(*) FROM ghraft_events WHERE state='pending'`, "unprocessed": `SELECT COUNT(*) FROM ghraft_events e WHERE NOT EXISTS(SELECT 1 FROM ghraft_triage t WHERE t.event_id=e.event_id) AND NOT EXISTS(SELECT 1 FROM ghraft_results r WHERE r.event_id=e.event_id)`, "legacy_history": `SELECT COUNT(*) FROM ghraft_legacy_history`, "processed": `SELECT COUNT(*) FROM ghraft_triage`} {
 		var n int
-		if e = s.DB.QueryRowContext(ctx, q).Scan(&n); e != nil {
+		if e = s.db.QueryRowContext(ctx, q).Scan(&n); e != nil {
 			return nil, e
 		}
 		out[name] = n

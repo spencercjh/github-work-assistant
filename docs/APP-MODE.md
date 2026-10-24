@@ -9,7 +9,7 @@ Go 服务采集显式关注及从 GitHub Notifications 发现的公开 Issue／P
 ## 功能
 
 - 通过已登录的 `gh` 读取 Issue、时间线、评论、PR review、行评论及当前 head 的检查；分页完整读取，超过 16 MiB 的单次响应报错，不默默截断。
-- seekdb／MySQL 协议数据库保存快照、事件 outbox、加密会话和 Raft 结果引用。快照与事件同事务提交，重复快照不发事件。
+- 可选的关系数据库保存快照、事件 outbox、加密会话和 Raft 结果引用。快照与事件同事务提交，重复快照不发事件。
 - 首次观察会生成 `first_observation=true` 的事件，便于首轮调查；后续只在选定事实变化时生成。不是只比较 `updated_at`。
 - 通过 `raft-agent-manifest.v0` 提供事件、上下文、通知记账，以及仓库指引、刷新、任务关联和工作报告接口。
 - Agent Login 回调只接受配置指定的 Agent／Server／App 组合；每次调用重新查 userinfo，撤销后拒绝访问。
@@ -21,7 +21,7 @@ Go 服务采集显式关注及从 GitHub Notifications 发现的公开 Issue／P
 
 ## 运行
 
-需要 Go 1.24+、`gh`、独立 seekdb／MySQL 数据库及当前 Raft App 接入。使用专用数据库和账号；DSN 不应指向其他项目数据库。
+需要 Go 1.26+、`gh`、专用数据库及当前 Raft App 接入。数据库通过 `database_driver` 选择 SQLite、MySQL／seekdb／TiDB 或 PostgreSQL，连接方式见 [STORAGE.md](STORAGE.md)。省略该配置的既有安装继续使用 MySQL 驱动。使用专用数据库和账号；DSN 不应指向其他项目数据库。
 
 ```bash
 make build
@@ -33,7 +33,7 @@ cp config.example.json config.json
 
 | 环境变量 | 文件内容 |
 | --- | --- |
-| `GHRAFT_DSN_FILE` | MySQL DSN，例如 `user:password@tcp(127.0.0.1:12881)/ghraft?charset=utf8mb4&timeout=5s&readTimeout=20s&writeTimeout=20s` |
+| `GHRAFT_DSN_FILE` | 所选后端的私有连接文件；SQLite 为文件路径，MySQL／seekdb／TiDB 为 MySQL DSN，PostgreSQL 为连接 URL 或键值配置。示例见 [STORAGE.md](STORAGE.md)。 |
 | `GHRAFT_KEY_FILE` | 32 字节随机 AES 密钥的 64 位十六进制文本，用于加密数据库中的 token |
 | `GHRAFT_CLIENT_SECRET_FILE` | 注册后获得的 Raft App secret；只在服务端保存 |
 | `GHRAFT_LOCK_FILE` | 运行锁文件路径，防止同机启动两个服务实例 |
@@ -93,7 +93,7 @@ make check
 
 集成测试会清空专用测试数据库中的 `ghraft_*` 表。测试只接受 loopback TCP 和以 `_test` 结尾的数据库名；`make integration` 在缺少数据库时直接失败。测试 DSN 文件必须为私有普通文件。
 
-测试使用真实 seekdb/MySQL、真实 Git worktree、拦截所有 GitHub 调用的 `gh` fixture 和模拟 Raft HTTP 服务。覆盖重复投递、身份撤销、重启、任务关联、冲突解决后的两侧行为测试、指引与 base 变化，以及已撤销关注的积压。测试不会发布 GitHub 评论、review、PR 或提交。模拟 Raft 协议通过不等于离线 Agent 已被真实唤醒。历史接入记录见 [VALIDATION.md](../VALIDATION.md)，当前验收记录见 [docs/VALIDATION-CURRENT.md](VALIDATION-CURRENT.md)。
+同一套测试可使用 SQLite、MySQL、seekdb 或 PostgreSQL，并使用真实 Git worktree、拦截所有 GitHub 调用的 `gh` fixture 和模拟 Raft HTTP 服务。覆盖重复投递、身份撤销、重启、任务关联、冲突解决后的两侧行为测试、指引与 base 变化，以及已撤销关注的积压。测试不会发布 GitHub 评论、review、PR 或提交。模拟 Raft 协议通过不等于离线 Agent 已被真实唤醒。历史接入记录见 [VALIDATION.md](../VALIDATION.md)，当前验收记录见 [docs/VALIDATION-CURRENT.md](VALIDATION-CURRENT.md)。
 
 `scripts/prepare-e2e-fixture.py` 可生成可保留的离线场景，让真实 Raft Agent 使用 CLI 完成一次任务。执行方法和边界见仓库工作指引。
 

@@ -17,7 +17,7 @@ type Raft struct {
 	Secret     string
 	Credential string
 	HTTP       *http.Client
-	Store      *Store
+	Store      Persistence
 }
 type Identity struct {
 	Subject    string `json:"sub"`
@@ -165,7 +165,7 @@ func (r *Raft) AuthorizeEvents(ctx context.Context) error {
 	// An explicit successful reauthorization makes previously blocked events eligible now.
 	for _, watch := range r.Config.Watches {
 		key := strings.ToLower(fmt.Sprintf("%s#%d", watch.Repo, watch.Number))
-		if _, err := r.Store.DB.ExecContext(ctx, `UPDATE ghraft_events SET next_attempt=0 WHERE state='pending' AND resource_key=?`, key); err != nil {
+		if err := r.Store.ResetDelivery(ctx, key); err != nil {
 			return err
 		}
 	}

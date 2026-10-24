@@ -86,7 +86,7 @@ func (r *Raft) sendExternal(ctx context.Context, ev Event) ([]byte, error) {
 	// upgrade must retry the identical keyed write after an ambiguous response.
 	envelope, _ := json.Marshal(map[string]any{"identity": r.Config.ExternalAgent, "request": body})
 	name := "external-delivery:" + ev.ID
-	if _, err = r.Store.DB.ExecContext(ctx, `INSERT IGNORE INTO ghraft_meta(name,value) VALUES(?,?)`, name, string(envelope)); err != nil {
+	if err = r.Store.InsertMeta(ctx, name, string(envelope)); err != nil {
 		return nil, err
 	}
 	saved, err := r.Store.Meta(ctx, name, "")

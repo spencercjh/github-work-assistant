@@ -81,16 +81,16 @@ func TestDeltaBackfillAndEdits(t *testing.T) {
 func TestLegacyImportAndTriagePersistence(t *testing.T) {
 	dsn := []byte(disposableTestDSN(t))
 	ctx := context.Background()
-	s, e := OpenStore(ctx, strings.TrimSpace(string(dsn)), bytes.Repeat([]byte{1}, 32))
+	s, e := openTestStore(t, ctx, strings.TrimSpace(string(dsn)), bytes.Repeat([]byte{1}, 32))
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.DB.Close()
+	defer s.db.Close()
 	if e = s.Migrate(ctx); e != nil {
 		t.Fatal(e)
 	}
 	for _, table := range []string{"ghraft_watch_access", "ghraft_work_links", "ghraft_triage", "ghraft_legacy_history", "ghraft_meta", "ghraft_watches", "ghraft_results", "ghraft_events", "ghraft_snapshots"} {
-		if _, e = s.DB.Exec("DELETE FROM " + table); e != nil {
+		if _, e = s.db.Exec("DELETE FROM " + table); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -135,11 +135,11 @@ func TestLegacyImportAndTriagePersistence(t *testing.T) {
 	if e = s.RecordTriage(ctx, triage); e == nil {
 		t.Fatal("overwrite accepted")
 	}
-	reopened, e := OpenStore(ctx, strings.TrimSpace(string(dsn)), bytes.Repeat([]byte{1}, 32))
+	reopened, e := openTestStore(t, ctx, strings.TrimSpace(string(dsn)), bytes.Repeat([]byte{1}, 32))
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer reopened.DB.Close()
+	defer reopened.db.Close()
 	pending, e = reopened.Unprocessed(ctx)
 	if e != nil || len(pending) != 0 {
 		t.Fatal("processed notification replay after restart", e)

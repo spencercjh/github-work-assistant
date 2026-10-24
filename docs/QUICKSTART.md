@@ -6,7 +6,7 @@
 
 - 在电脑上安装并运行 Raft，准备一个可用的执行 Agent，例如 `@reviewer`。确认该 Agent 能运行本机命令；它需要读取本次安装目录。
 - 在同一个 Raft Server 的 **External Agents** 页面创建另一个身份，用于运行采集程序，并取得其登录 token。它需要 `read` 和 `send` 能力。不要使用执行 Agent 的管理凭据。页面入口与登录方式见 [Raft 官方说明](https://docs.raft.build/developers/sdk/external-agents/)。
-- 安装 [Go 1.24 或更新版本](https://go.dev/doc/install)、[GitHub CLI](https://cli.github.com/)、[Docker Engine](https://docs.docker.com/engine/install/) 和 [Docker Compose 插件](https://docs.docker.com/compose/install/linux/)。服务账号必须有权运行 Docker；先检查 `docker info` 和 `docker compose version`。
+- 安装 [Go 1.26 或更新版本](https://go.dev/doc/install)和 [GitHub CLI](https://cli.github.com/)。默认使用本地 SQLite，无需数据库服务或 C 编译器。只有选择新建 MySQL 容器时，才需要 [Docker Engine](https://docs.docker.com/engine/install/) 和 [Compose 插件](https://docs.docker.com/compose/install/linux/)，并检查服务账号能运行 `docker info` 和 `docker compose version`。
 - 以服务账号运行 `gh auth login --hostname github.com`。Notifications 读取需要对应权限；使用个人访问令牌时须支持 Notifications API，并有目标资源读取权限。程序不提取或复制 `gh` 的凭据。
 
 无需新增模型 API key、Raft App 注册、回调地址或公网入站端口。External Agent 在这里是发送通知的程序身份，不运行模型，也不处理发给它的聊天。请继续与执行 Agent 对话。
@@ -21,37 +21,38 @@ cd github-work-assistant
 make setup
 ```
 
-依次填写执行 Agent 名称、可选的人类通知收件人、External Agent token。token 输入不会回显。向导验证 GitHub 登录与 External Agent 身份，并自动填入账号和 Server ID。
+先选择本地 SQLite、新建 MySQL 容器或已有数据库，再填写执行 Agent 名称、可选的人类通知收件人、External Agent token。token 输入不会回显。向导验证 GitHub 登录与 External Agent 身份，并自动填入账号和 Server ID。已有数据库的连接文件和云数据库配置见[存储配置](STORAGE.md)。
 
 安装产生私有目录 `state/assistant`：
 
 | 文件 | 用途 |
 | --- | --- |
-| `config.json` | 账号、收件人、关注对象和轮询配置 |
+| `config.json` | 数据库类型、账号、收件人、关注对象和轮询配置 |
 | `run` | 固定使用本实例配置、密钥和二进制的启动入口 |
-| `database.yml` | 独立的 MySQL 8.4 Compose 配置，镜像固定到摘要 |
-| `private/` | 数据库密码、DSN、加密密钥和 External Agent token |
+| `database.yml` | 仅新建 MySQL 容器时生成，镜像固定到摘要 |
+| `private/` | 数据库连接文件、加密密钥和 External Agent token；默认 SQLite 数据库也存于此处 |
 | `EXECUTOR.md` | 交给执行 Agent 的本地操作说明 |
 | `ghraft-*.service` | 已填写本机路径的 systemd 用户服务 |
 
-MySQL 只绑定 `127.0.0.1:13306`，数据保存在专用 Docker 卷。配置、凭据文件权限为 `0600`，目录为 `0700`。运行入口绑定此实例，不使用其他安装遗留的 `GHRAFT_*` 环境变量。不要把 `state/`、凭据或数据库备份提交到 Git。
+默认 SQLite 保存在 `private/assistant.sqlite`。新建 MySQL 容器只绑定 `127.0.0.1:13306`，数据保存在专用 Docker 卷；已有数据库沿用提供的连接。配置、凭据和 SQLite 文件权限为 `0600`，目录为 `0700`。运行入口绑定此实例，不使用其他安装遗留的 `GHRAFT_*` 环境变量。不要把 `state/`、凭据或数据库备份提交到 Git。
 
-若端口已占用，或需要自动化安装，先把 External Agent token 写入一个 `0600` 普通文件，再运行：
+自动化安装时，先把 External Agent token 写入一个 `0600` 普通文件。以下示例使用默认 SQLite：
 
 ```bash
 make build
 bin/ghraft init --dir state/my-assistant \
   --raft-token-file /private/path/external-token \
-  --recipient @reviewer --notify @owner --db-port 13307
+  --recipient @reviewer --notify @owner --database sqlite
 
-docker compose -f state/my-assistant/database.yml up -d --wait
 state/my-assistant/run migrate
 state/my-assistant/run doctor
 ```
 
+需要独立 MySQL 容器时，将 `--database sqlite` 改为 `--database mysql --db-port 13307`，并在 `migrate` 前执行 `docker compose -f state/my-assistant/database.yml up -d --wait`。已有数据库使用 `--database postgres --dsn-file /private/path/database-dsn` 等组合，程序不会创建数据库服务。
+
 `--notify` 可省略。`--watch 'owner/repo#123,owner/other#456'` 可增加固定关注对象。`--raft-api` 仅用于指定其他 Raft HTTPS API 入口；程序拒绝重定向。不要把 token 放在命令参数、环境变量值或聊天中。
 
-`init` 不覆盖已有目录。若数据库下载或启动失败，修复原因后从 `docker compose … up -d --wait` 继续，再执行 `migrate` 和 `doctor`，无需重新生成身份和密码。
+`init` 只生成配置，不覆盖已有目录。`migrate` 创建 SQLite 文件或初始化已选数据库的表；`doctor` 不创建缺失数据库。若初始化失败，修复路径或连接后重试 `migrate`、`doctor`。新建 MySQL 容器失败时，先重试 Compose 启动步骤，无需重新生成身份和密码。
 
 ## 配置执行 Agent 与关注范围
 
@@ -111,15 +112,17 @@ systemctl --user enable --now "$unit"
 journalctl --user -u "$unit" -n 50 --no-pager
 ```
 
-生成的服务保存初始化时的可执行文件路径和 `PATH`。移动仓库或工具后应更新服务与 `run` 中的路径。`enable` 保证用户服务管理器启动后拉起服务；若要求退出登录后或开机无登录运行，需由机器管理员启用该账号的 linger，并确认 Docker 随机器启动。
+生成的服务保存初始化时的可执行文件路径和 `PATH`。移动仓库或工具后应更新服务与 `run` 中的路径。`enable` 保证用户服务管理器启动后拉起服务；若要求退出登录后或开机无登录运行，需由机器管理员启用该账号的 linger，；选择 MySQL 容器时，还应确认 Docker 随机器启动。
 
 每套数据库只能有一个采集实例。本机锁防止重复启动同一实例，但不能防止另一台机器连接同一数据库。External 模式不监听 HTTP；通过 `doctor`、`status` 和服务日志检查运行情况。
 
 ## 备份、升级与恢复
 
-数据库卷保存快照、待发事件和处理记录；实例目录保存配置和密钥。两者必须配套备份，`private/key` 丢失会使数据库中的加密状态无法解密。备份也应保持私有权限。
+所选数据库保存快照、待发事件和处理记录；实例目录保存配置和密钥。两者必须配套备份，`private/key` 丢失会使数据库中的加密状态无法解密。备份也应保持私有权限。
 
-暂停采集服务后，可用生成的 Compose 配置导出本实例数据库：
+先暂停采集服务及使用此实例 CLI 的执行操作。SQLite 默认安装可以在所有连接退出后，归档完整实例目录；使用自定义路径时，也须一起备份该路径的数据库及尚存的 `-wal`、`-shm` 文件。不要在运行中只复制 SQLite 主文件。外部 PostgreSQL 使用 `pg_dump`，外部 MySQL／seekdb／TiDB 使用服务商支持的一致性备份方式；具体要求见[存储配置](STORAGE.md)。
+
+以下导出与导入命令仅适用于向导创建的 MySQL 容器：
 
 ```bash
 systemctl --user stop "$unit"
@@ -133,7 +136,7 @@ tar -czf backups/assistant-config.tgz -C state assistant
 
 升级代码前保留旧二进制、数据库备份和实例配置。更新仓库并运行 `make build`，保留原实例目录，然后执行 `run migrate`、`run doctor` 并重启服务；不要重新运行 `init`，不要删除 Docker 卷。不同版本的数据库回滚必须先核对兼容性，不能只换回旧二进制。
 
-恢复到原安装位置时，先恢复私有配置，启动该 Compose 数据库，再导入对应备份：
+SQLite 恢复时，先保持所有连接关闭，再恢复匹配的实例目录和数据库文件，检查私有权限及路径，最后执行 `run doctor`。对于向导创建的 MySQL 容器，先恢复私有配置，启动该 Compose 数据库，再导入对应备份：
 
 ```bash
 docker compose -f state/assistant/database.yml up -d --wait
@@ -159,6 +162,6 @@ state/assistant/run doctor
 | `doctor` 成功但没有消息 | 检查是否有关注对象、`collect` 是否成功、`events` 的状态与退避时间，再核对执行 Agent 名称。 |
 | 消息已送达但 `pending` 仍有记录 | 执行 Agent 尚未记录判断或报告；投递和处理是两件事。 |
 | `another local service owns this instance` | 找到已有服务，使用已有进程；不要同时运行前台和 systemd 实例。 |
-| 初次建库失败 | 检查 Docker、磁盘空间与端口，再从 Compose 启动步骤继续；不要删除已有实例来绕过错误。 |
+| 初次建库失败 | SQLite 检查文件路径、权限和磁盘空间；服务器数据库检查连接、TLS 和建表权限；新建 MySQL 容器另查 Docker 与端口。修复后重新执行 `migrate`，不要删除已有数据来绕过错误。 |
 
 已有 App 模式部署继续参考 [App 模式文档](APP-MODE.md)。本向导不会迁移它的数据库、更新正在运行的服务或改变原来的授权。

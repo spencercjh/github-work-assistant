@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github-raft-app/internal/app"
+	"github-raft-app/internal/database"
 )
 
 const databaseImage = "mysql:8.4@sha256:76f0358884cb92d9a086d24e5671c38048d3fef40f2588703d73eb55392d6b69"
@@ -28,6 +29,9 @@ const databaseImage = "mysql:8.4@sha256:76f0358884cb92d9a086d24e5671c38048d3fef4
 var handleRE = regexp.MustCompile(`^@?[A-Za-z0-9_.-]+(?:~(?:agent|human))?$`)
 
 type Options struct {
+	Database    string
+	DSN         []byte
+	SQLitePath  string
 	Dir         string
 	Executable  string
 	Token       []byte
@@ -48,7 +52,10 @@ func Init(args []string, out io.Writer) error {
 	recipient := f.String("recipient", "", "Existing execution agent handle, for example @reviewer")
 	notify := f.String("notify", "", "Optional human handle to receive useful findings")
 	api := f.String("raft-api", "https://api.raft.build", "Raft API HTTPS origin")
-	port := f.Int("db-port", 13306, "Unused loopback MySQL port")
+	backend := f.String("database", "sqlite", "Persistence backend: sqlite, mysql, seekdb, tidb, postgres")
+	dsnFile := f.String("dsn-file", "", "Private connection file for an existing server database; never passed in argv")
+	sqlitePath := f.String("sqlite-path", "", "Local SQLite file; defaults to the private instance directory")
+	port := f.Int("db-port", 13306, "Unused loopback port for a managed MySQL container")
 	watches := f.String("watch", "", "Optional comma-separated owner/repo#number watches")
 	if err := f.Parse(args); err != nil {
 		return err
@@ -63,7 +70,7 @@ func Init(args []string, out io.Writer) error {
 	if err != nil || apiURL.Scheme != "https" || apiURL.Host == "" || apiURL.User != nil || apiURL.RawQuery != "" || apiURL.Fragment != "" || strings.Trim(apiURL.Path, "/") != "" {
 		return errors.New("--raft-api must be an HTTPS origin without credentials, path or query")
 	}
-	if *port < 1024 || *port > 65535 {
+	if *backend == "mysql" && *dsnFile == "" && (*port < 1024 || *port > 65535) {
 		return errors.New("--db-port must be 1024..65535")
 	}
 	if !handleRE.MatchString(*recipient) || (*notify != "" && !handleRE.MatchString(*notify)) {
@@ -72,11 +79,23 @@ func Init(args []string, out io.Writer) error {
 	if _, err := os.Lstat(*dir); !os.IsNotExist(err) {
 		return errors.New("instance directory already exists or is inaccessible; init never overwrites credentials or data")
 	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
-	if err != nil {
-		return errors.New("database port is unavailable; choose another --db-port")
+	if _, err = database.Driver(*backend); err != nil {
+		return err
 	}
-	listener.Close()
+	if *backend == "mysql" && *dsnFile == "" {
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
+		if err != nil {
+			return errors.New("database port is unavailable; choose another --db-port")
+		}
+		listener.Close()
+	}
+	var dsn []byte
+	if *dsnFile != "" {
+		dsn, err = app.ReadPrivateFile(*dsnFile)
+		if err != nil {
+			return errors.New("cannot read private database connection file")
+		}
+	}
 	token, err := app.ReadPrivateFile(*tokenFile)
 	if err != nil {
 		return fmt.Errorf("Raft credential: %w", err)
@@ -115,12 +134,16 @@ func Init(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	o := Options{Dir: *dir, Executable: executable, Token: token, Identity: identity, GitHubLogin: login, Recipient: *recipient, Notify: *notify, RaftAPI: r.Config.RaftAPI, Port: *port, Watches: parsed}
+	o := Options{Database: *backend, DSN: dsn, SQLitePath: *sqlitePath, Dir: *dir, Executable: executable, Token: token, Identity: identity, GitHubLogin: login, Recipient: *recipient, Notify: *notify, RaftAPI: r.Config.RaftAPI, Port: *port, Watches: parsed}
 	if err := Write(o); err != nil {
 		return err
 	}
 	abs, _ := filepath.Abs(*dir)
-	fmt.Fprintf(out, "Created private instance: %s\nGitHub account: %s\nRaft sender: @%s\nNext: docker compose -f %s/database.yml up -d --wait\nThen: %s/run migrate\nThen: %s/run doctor\nGive %s/EXECUTOR.md to the execution agent, then run: %s/run serve\n", abs, login, identity.Agent.Name, shellQuote(abs), shellQuote(abs), shellQuote(abs), abs, shellQuote(abs))
+	fmt.Fprintf(out, "Created private instance: %s\nGitHub account: %s\nRaft sender: @%s\nDatabase backend: %s\n", abs, login, identity.Agent.Name, *backend)
+	if *backend == "mysql" && len(dsn) == 0 {
+		fmt.Fprintf(out, "Next: docker compose -f %s/database.yml up -d --wait\n", shellQuote(abs))
+	}
+	fmt.Fprintf(out, "Then: %s/run migrate\nThen: %s/run doctor\nGive %s/EXECUTOR.md to the execution agent, then run: %s/run serve\n", shellQuote(abs), shellQuote(abs), abs, shellQuote(abs))
 	return nil
 }
 
@@ -135,6 +158,26 @@ func randomHex(n int) (string, error) {
 // Write publishes one complete instance atomically. No existing state is reused
 // and no network access, service startup or database mutation happens here.
 func Write(o Options) error {
+	if o.Database == "" {
+		o.Database = "sqlite"
+	}
+	kind, err := database.Driver(o.Database)
+	if err != nil {
+		return err
+	}
+	managed := o.Database == "mysql" && len(o.DSN) == 0
+	if kind != "sqlite" && !managed && len(o.DSN) == 0 {
+		return errors.New("an existing database requires --dsn-file")
+	}
+	if kind == "sqlite" && len(o.DSN) != 0 {
+		return errors.New("use --sqlite-path for a local file, not --dsn-file")
+	}
+	if kind != "sqlite" && o.SQLitePath != "" {
+		return errors.New("--sqlite-path requires SQLite")
+	}
+	if managed && (o.Port < 1024 || o.Port > 65535) {
+		return errors.New("invalid managed database port")
+	}
 	root, err := filepath.Abs(o.Dir)
 	if err != nil {
 		return err
@@ -185,7 +228,7 @@ func Write(o Options) error {
 	if o.Notify != "" {
 		notify = "dm:@" + strings.TrimSuffix(strings.TrimPrefix(o.Notify, "@"), "~human") + "~human"
 	}
-	c := app.Config{RaftMode: "external", ExternalAgent: o.Identity.Agent.ID, ServerID: o.Identity.Server.ID, ServerSlug: o.Identity.Server.Slug, RaftAPI: o.RaftAPI, GitHubLogin: o.GitHubLogin, DeliveryTarget: "dm:@" + recipient + "~agent", PollSeconds: 120, Discover: true, Watches: o.Watches, NotifyTarget: notify, LookbackHours: 6, WorkspaceRoot: filepath.Join(root, "worktrees")}
+	c := app.Config{DatabaseDriver: o.Database, RaftMode: "external", ExternalAgent: o.Identity.Agent.ID, ServerID: o.Identity.Server.ID, ServerSlug: o.Identity.Server.Slug, RaftAPI: o.RaftAPI, GitHubLogin: o.GitHubLogin, DeliveryTarget: "dm:@" + recipient + "~agent", PollSeconds: 120, Discover: true, Watches: o.Watches, NotifyTarget: notify, LookbackHours: 6, WorkspaceRoot: filepath.Join(root, "worktrees")}
 	config, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
@@ -230,13 +273,28 @@ UMask=0077
 WantedBy=default.target
 `, strings.ReplaceAll(unitQuote(filepath.Join(root, "run")), "$", "$$"), unitQuote("PATH="+os.Getenv("PATH")))
 	files := map[string][]byte{
-		"config.json":          append(config, '\n'),
-		"private/key":          []byte(key + "\n"),
-		"private/raft-token":   append(append([]byte{}, o.Token...), '\n'),
-		"private/dsn":          []byte(fmt.Sprintf("assistant:%s@tcp(127.0.0.1:%d)/assistant?charset=utf8mb4&timeout=5s&readTimeout=20s&writeTimeout=20s\n", password, o.Port)),
-		"private/database.env": []byte("MYSQL_DATABASE=assistant\nMYSQL_USER=assistant\nMYSQL_PASSWORD=" + password + "\nMYSQL_ROOT_PASSWORD=" + rootPassword + "\n"),
-		"database.yml":         []byte(compose), "run": []byte(run), name + ".service": []byte(unit),
+		"config.json":        append(config, '\n'),
+		"private/key":        []byte(key + "\n"),
+		"private/raft-token": append(append([]byte{}, o.Token...), '\n'),
+		"run":                []byte(run), name + ".service": []byte(unit),
 		"EXECUTOR.md": []byte(executorGuide(root, notify)),
+	}
+	if kind == "sqlite" {
+		path := o.SQLitePath
+		if path == "" {
+			path = filepath.Join(root, "private", "assistant.sqlite")
+		}
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		files["private/dsn"] = []byte(path + "\n")
+	} else if managed {
+		files["private/dsn"] = []byte(fmt.Sprintf("assistant:%s@tcp(127.0.0.1:%d)/assistant?charset=utf8mb4&timeout=5s&readTimeout=20s&writeTimeout=20s\n", password, o.Port))
+		files["private/database.env"] = []byte("MYSQL_DATABASE=assistant\nMYSQL_USER=assistant\nMYSQL_PASSWORD=" + password + "\nMYSQL_ROOT_PASSWORD=" + rootPassword + "\n")
+		files["database.yml"] = []byte(compose)
+	} else {
+		files["private/dsn"] = []byte(strings.TrimSpace(string(o.DSN)) + "\n")
 	}
 	for name, body := range files {
 		mode := os.FileMode(0600)

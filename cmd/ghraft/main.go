@@ -80,11 +80,11 @@ func run() error {
 	defer cancel()
 	dbctx, dbCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer dbCancel()
-	store, e := app.OpenStore(dbctx, string(dsn), key)
+	store, e := app.OpenStoreBackend(dbctx, c.DatabaseDriver, c.DatabaseLocation(string(dsn)), key, command == "migrate")
 	if e != nil {
 		return e
 	}
-	defer store.DB.Close()
+	defer store.Close()
 	store.LookbackHours = c.LookbackHours
 	if command == "migrate" {
 		return store.Migrate(dbctx)
