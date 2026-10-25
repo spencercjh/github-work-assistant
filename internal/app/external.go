@@ -51,10 +51,20 @@ func (r *Raft) ExternalIdentity(ctx context.Context) (ExternalIdentity, error) {
 	if r.Config.DeliveryTarget == "dm:@"+identity.Agent.Name+"~agent" {
 		return ExternalIdentity{}, errors.New("delivery_target must name a separate execution agent")
 	}
+	if r.Config.SharedTasks() {
+		for _, scope := range []string{"tasks", "channels"} {
+			if !containsScope(strings.Join(identity.Credential.Capabilities, " "), scope) {
+				return ExternalIdentity{}, fmt.Errorf("shared tasks require the %s capability", scope)
+			}
+		}
+	}
 	return identity, nil
 }
 
 func (r *Raft) sendExternal(ctx context.Context, ev Event) ([]byte, error) {
+	if r.Config.SharedTasks() {
+		return r.sendSharedTask(ctx, ev)
+	}
 	if !executorTargetRE.MatchString(r.Config.DeliveryTarget) || !idRE.MatchString(ev.ID) || !idRE.MatchString(ev.Version) {
 		return nil, errors.New("invalid external delivery configuration or event identity")
 	}

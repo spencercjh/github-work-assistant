@@ -4,8 +4,9 @@
 
 ## 准备账号与工具
 
-- 在电脑上安装并运行 Raft，准备一个可用的执行 Agent，例如 `@reviewer`。确认该 Agent 能运行本机命令；它需要读取本次安装目录。
-- 在同一个 Raft Server 的 **External Agents** 页面创建另一个身份，用于运行采集程序，并取得其登录 token。它需要 `read` 和 `send` 能力。不要使用执行 Agent 的管理凭据。页面入口与登录方式见 [Raft 官方说明](https://docs.raft.build/developers/sdk/external-agents/)。
+- 在电脑上安装并运行 Raft，准备希望参与工作的执行 Agent。它们都需要能运行本机命令并读取本次安装目录。
+- 在同一个 Raft Server 的 **External Agents** 页面创建另一个身份，用于运行采集程序，并取得其登录 token。它需要 `read`、`send`、`tasks` 和 `channels` 能力。不要使用执行 Agent 的管理凭据。页面入口与登录方式见 [Raft 官方说明](https://docs.raft.build/developers/sdk/external-agents/)。
+- 创建一个工作频道，例如 `#github-work`，将采集身份和执行 Agent 加入。执行者由频道成员管理，无需在助手中维护名单。执行 Agent 应接收该频道的新任务通知，并获得用户的处理委托。
 - 安装 [Go 1.27.3 或更新版本](https://go.dev/doc/install)和 [GitHub CLI](https://cli.github.com/)。默认使用本地 SQLite，无需数据库服务或 C 编译器。只有选择新建 MySQL 容器时，才需要 [Docker Engine](https://docs.docker.com/engine/install/) 和 [Compose 插件](https://docs.docker.com/compose/install/linux/)，并检查服务账号能运行 `docker info` 和 `docker compose version`。
 - 以服务账号运行 `gh auth login --hostname github.com`。Notifications 读取需要对应权限；使用个人访问令牌时须支持 Notifications API，并有目标资源读取权限。程序不提取或复制 `gh` 的凭据。
 
@@ -21,7 +22,7 @@ cd github-work-assistant
 make setup
 ```
 
-先选择本地 SQLite、新建 MySQL 容器或已有数据库，再填写执行 Agent 名称、可选的人类通知收件人、External Agent token。token 输入不会回显。向导验证 GitHub 登录与 External Agent 身份，并自动填入账号和 Server ID。已有数据库的连接文件和云数据库配置见[存储配置](STORAGE.md)。
+先选择本地 SQLite、新建 MySQL 容器或已有数据库，再填写工作频道、可选的人类通知收件人、External Agent token。token 输入不会回显。向导验证 GitHub 登录与 External Agent 身份，并自动填入账号和 Server ID，并检查发送方是否已加入频道。已有数据库的连接文件和云数据库配置见[存储配置](STORAGE.md)。
 
 安装产生私有目录 `state/assistant`：
 
@@ -42,7 +43,7 @@ make setup
 make build
 bin/ghraft init --dir state/my-assistant \
   --raft-token-file /private/path/external-token \
-  --recipient @reviewer --notify @owner --database sqlite
+  --task-channel '#github-work' --notify @owner --database sqlite
 
 state/my-assistant/run migrate
 state/my-assistant/run doctor
@@ -54,9 +55,19 @@ state/my-assistant/run doctor
 
 `init` 只生成配置，不覆盖已有目录。`migrate` 创建 SQLite 文件或初始化已选数据库的表；`doctor` 不创建缺失数据库。若初始化失败，修复路径或连接后重试 `migrate`、`doctor`。新建 MySQL 容器失败时，先重试 Compose 启动步骤，无需重新生成身份和密码。
 
-## 配置执行 Agent 与关注范围
+## 配置任务频道与关注范围
 
-把 `state/assistant/EXECUTOR.md` 的绝对路径发给执行 Agent，明确委托它读取并处理本安装发来的 GitHub 通知。发送方是刚创建的 External Agent，执行方是 `config.json` 的 `delivery_target`。使用稳定名称，不能把发送方填成自己的收件人。
+把 `state/assistant/EXECUTOR.md` 的绝对路径交给频道中的执行 Agent，明确委托它们处理通知及允许的操作范围。配置只保存频道：
+
+```json
+"delivery_target": "#github-work"
+```
+
+每条事件创建一个未分配任务，频道里的 Agent 竞争认领。Raft 保证同一任务只有一个负责人；成功者处理，已被别人认领者静默结束，不重试争抢、不另建任务、不向用户报错。网络或权限错误需要排查，不能当成正常落选。完整操作见[执行工作流](AGENT-WORKFLOW.md#竞争认领共享任务)。
+
+增减执行者只需管理频道成员，并向新成员提供 `EXECUTOR.md`；不修改助手名单。不要静音用于接收工作的频道。频道中的人类成员也可能拥有认领权限；应用没有额外的候选人权限表。执行者中断后任务不会自动转移，须由原负责人或有权限的用户明确交接。
+
+单人 DM 投递仍可用 `--recipient @reviewer` 安装，与 `--task-channel` 二选一。它不创建共享任务，也不提供竞争认领。
 
 初始安装通过 GitHub Notifications 自动发现公开 Issue／PR。首次发现的事项保留最近 6 小时内的变化供判断，后续沿持久化游标继续；它不是 GitHub 全量历史归档。可在 `config.json` 增加固定关注对象：
 
@@ -70,7 +81,7 @@ state/my-assistant/run doctor
 
 需要代码工作时，按[仓库工作指引](REPOSITORY-WORK.md)在本实例的 `repositories` 中配置目标、可信指引和测试命令。默认仅调查；本地修改权限与 GitHub 发布权限分别取得授权。`Project-HAMi` 仓库始终限制为只读。
 
-配置在进程启动时读取。修改配置后先执行 `run check-config`，再重启采集进程。不要直接更换现有安装的发送身份或执行收件人：待发请求已绑定原身份和目标。确需更换时，先处理旧积压并停止旧实例，再建立新实例；新实例会重新观察关注对象。
+配置在进程启动时读取。修改配置后先执行 `run check-config`，再重启采集进程。不要直接更换现有安装的发送身份或投递频道／DM 目标：待发请求已绑定原身份和目标。确需更换时，先处理旧积压并停止旧实例，再建立新实例；新实例会重新观察关注对象。
 
 ## 验证实际收信
 
@@ -83,17 +94,17 @@ state/assistant/run status
 state/assistant/run pending
 ```
 
-`doctor` 只检查 GitHub 登录、数据库、表结构以及 External Agent 的身份和能力，不发送测试消息，也不证明收件人可达。若没有近期公开 Notifications，请增加一个真实的固定关注对象后再执行 `collect`；首次观察会产生事件。
+`doctor` 检查 GitHub 登录、数据库、表结构、External Agent 身份和能力；频道模式还检查发送方是否在频道中。它不创建测试任务，也不证明执行 Agent 在线或已获得委托。若没有近期公开 Notifications，请增加一个真实的固定关注对象后再执行 `collect`；首次观察会产生事件。
 
 检查以下结果后再判断助手可用：
 
 - `status` 中关注对象有新的 `last_success`，没有未解释的采集错误。
-- 执行 Agent 的 Raft 会话收到了对应事件 ID。`events` 中的 `accepted` 仅表示 Raft 接受消息。
-- 执行 Agent 能读取 `work-context`、给出有来源的判断，并用 `record-triage` 或 `record-work-result` 保存记录。处理后对应事件不再出现在 `pending`。
+- 工作频道出现一个带对应事件 ID 的未分配任务。`events` 中的 `accepted` 表示 Raft 接受了任务创建；回执包含频道、任务编号和消息标识。
+- 成功认领者通过 `verify-claim` 后能读取 `work-context`、给出有来源的判断，并用 `record-triage` 或 `record-work-result` 保存记录。处理后对应事件不再出现在 `pending`。
 
-发送失败保持 `pending` 并按退避重试，最多间隔一小时。重启不会强行跳过退避。完整请求在第一次发送前已保存；响应丢失后重试使用同一幂等键和内容。服务端去重记录有保留期限，因此执行 Agent 仍须按事件 ID 检查处理历史。
+发送失败保持 `pending` 并按退避重试，最多间隔一小时。重启不会强行跳过退避。完整请求在第一次发送前已保存；响应丢失后重试使用同一幂等键和内容。Raft 的任务创建去重键有效期为 24 小时。若结果不明确持续 23 小时，助手保留待发状态并停止自动创建，避免期限过后产生第二个任务；此时需检查原任务和投递记录，不能删除本机记录或换键重发来绕过检查。执行 Agent 仍须按事件 ID 检查处理历史。
 
-此程序发送独立的事件通知，使用 Agent API 的 `continueAnyway`，不读取用户聊天以解除发送暂停，也不按聊天上下文自动生成回复。若服务端仍返回 `held`，程序会报告错误并保留事件；应在 Raft 检查该身份和会话，不能据此标记已送达。
+单人 DM 模式发送独立的事件通知，使用 Agent API 的 `continueAnyway`，不读取用户聊天以解除发送暂停，也不按聊天上下文自动生成回复。若服务端仍返回 `held`，程序会报告错误并保留事件；应在 Raft 检查该身份和会话，不能据此标记已送达。
 
 ## 常驻运行
 
@@ -114,7 +125,7 @@ systemctl --user enable --now "$unit"
 journalctl --user -u "$unit" -n 50 --no-pager
 ```
 
-生成的服务保存初始化时的可执行文件路径和 `PATH`。移动仓库或工具后应更新服务与 `run` 中的路径。`enable` 保证用户服务管理器启动后拉起服务；若要求退出登录后或开机无登录运行，需由机器管理员启用该账号的 linger，；选择 MySQL 容器时，还应确认 Docker 随机器启动。
+生成的服务保存初始化时的可执行文件路径和 `PATH`。移动仓库或工具后应更新服务与 `run` 中的路径。`enable` 保证用户服务管理器启动后拉起服务；若要求退出登录后或开机无登录运行，需由机器管理员启用该账号的 linger；选择 MySQL 容器时，还应确认 Docker 随机器启动。
 
 每套数据库只能有一个采集实例。本机锁防止重复启动同一实例，但不能防止另一台机器连接同一数据库。External 模式不监听 HTTP；通过 `doctor`、`status` 和服务日志检查运行情况。
 
@@ -161,7 +172,9 @@ state/assistant/run doctor
 | `external credential does not match` | 使用创建本实例时的 External Agent 身份；不要混用其他 Server、发送方或受管 Agent 凭据。 |
 | `Raft HTTP 401/403` | 检查 token 是否撤销、能力范围及发送目标权限；事件会保留，不代表丢失。 |
 | `Raft transport failed` | 检查网络和系统 CA。自建 CA 可通过 Go 的 `SSL_CERT_FILE` 提供受信任根证书，不能关闭 TLS 验证。 |
-| `doctor` 成功但没有消息 | 检查是否有关注对象、`collect` 是否成功、`events` 的状态与退避时间，再核对执行 Agent 名称。 |
+| `doctor` 成功但没有消息 | 检查是否有关注对象、`collect` 是否成功、`events` 的状态与退避时间，再核对频道成员与执行 Agent 的收信设置。 |
+| 认领结果显示已被别人认领 | 这是正常结果，静默结束本次工作，不重试、不另建任务、不报错。 |
+| `verify-claim` 返回 `execute=false` | 任务归别人或已进入审阅／结束，停止执行；HTTP、权限等错误不会被转成这个结果。 |
 | 消息已送达但 `pending` 仍有记录 | 执行 Agent 尚未记录判断或报告；投递和处理是两件事。 |
 | `another local service owns this instance` | 找到已有服务，使用已有进程；不要同时运行前台和 systemd 实例。 |
 | 初次建库失败 | SQLite 检查文件路径、权限和磁盘空间；服务器数据库检查连接、TLS 和建表权限；新建 MySQL 容器另查 Docker 与端口。修复后重新执行 `migrate`，不要删除已有数据来绕过错误。 |

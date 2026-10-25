@@ -98,7 +98,8 @@ func run() error {
 		secret = string(b)
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
-	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver") {
+	needsClaim := c.SharedTasks() && (command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree")
+	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || needsClaim) {
 		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
 		if err != nil {
 			return err
@@ -124,6 +125,7 @@ func run() error {
 	case "record-triage":
 		f := flag.NewFlagSet(command, flag.ContinueOnError)
 		var in app.Triage
+		f.StringVar(&in.Executor, "executor", "", "Your own Raft @handle; required for shared tasks")
 		f.StringVar(&in.EventID, "event", "", "Captured event ID")
 		f.StringVar(&in.Outcome, "outcome", "", "quiet or notified")
 		reasonFile := f.String("reason-file", "", "UTF-8 file containing the evidence-based reason")
@@ -141,6 +143,9 @@ func run() error {
 		}
 		in.Reason = string(reason)
 		if err = svc.RecordTriage(ctx, in); err != nil {
+			if errors.Is(err, app.ErrClaimUnavailable) {
+				return json.NewEncoder(os.Stdout).Encode(map[string]any{"recorded": false, "execute": false, "reason": "already_owned_or_finished"})
+			}
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]bool{"recorded": true})
@@ -150,7 +155,7 @@ func run() error {
 			return e
 		}
 		return err
-	case "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree":
+	case "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
@@ -224,13 +229,14 @@ func run() error {
 		}
 		return e
 	default:
-		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree")
+		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree")
 	}
 }
 
 func workCommand(ctx context.Context, svc *app.Service, command string, args []string) error {
 	f := flag.NewFlagSet(command, flag.ContinueOnError)
 	in := app.WorkInput{}
+	f.StringVar(&in.Executor, "executor", "", "Your own Raft @handle; required for shared tasks")
 	f.StringVar(&in.EventID, "event", "", "Captured event ID")
 	f.StringVar(&in.EvidenceVersion, "version", "", "Current evidence version")
 	f.StringVar(&in.GuideVersion, "guide", "", "Current guide version")
@@ -248,6 +254,16 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	var result any
 	var err error
 	switch command {
+	case "verify-claim":
+		if !svc.Config.SharedTasks() {
+			return errors.New("verify-claim requires shared task delivery")
+		}
+		err = svc.VerifyClaim(ctx, in.EventID, in.Executor)
+		if errors.Is(err, app.ErrClaimUnavailable) {
+			result, err = map[string]any{"execute": false, "reason": "already_owned_or_finished"}, nil
+		} else if err == nil {
+			result = map[string]bool{"execute": true}
+		}
 	case "work-context":
 		result, err = svc.WorkContext(ctx, in.EventID)
 	case "refresh-work-context":
@@ -273,6 +289,9 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 		} else {
 			result, err = svc.VerifyWorkspace(ctx, in)
 		}
+	}
+	if errors.Is(err, app.ErrClaimUnavailable) {
+		result, err = map[string]any{"execute": false, "reason": "already_owned_or_finished"}, nil
 	}
 	if err != nil {
 		return err

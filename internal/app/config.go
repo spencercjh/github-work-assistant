@@ -118,8 +118,8 @@ func LoadConfig(path string) (Config, error) {
 		origins = append(origins, c.Origin)
 	} else {
 		identities = append(identities, c.ExternalAgent)
-		if !executorTargetRE.MatchString(c.DeliveryTarget) {
-			return c, errors.New("external delivery_target must be dm:@<executor-name>~agent")
+		if err := c.ValidateDeliveryTarget(); err != nil {
+			return c, err
 		}
 	}
 	for _, s := range identities {

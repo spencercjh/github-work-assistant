@@ -1,6 +1,16 @@
 # 自助部署验证
 
-验证日期：2026-10-24。本页记录 External Agent 自助部署与随后增加的数据库选择功能。已有 App 模式另行保留。
+验证更新：2026-10-25。本页记录 External Agent 自助部署、数据库选择和频道竞争认领功能。已有 App 模式另行保留。
+
+## 频道竞争认领验证
+
+频道模式以一个未分配任务承载一条事件，不保存执行者名单。Raft 的原子认领负责确定唯一负责人，执行者使用自己的身份认领。本机 `verify-claim` 读取实时归属；落选／已结束返回 `execute=false`，网络、权限和无法确认状态仍返回错误。
+
+协议测试模拟 8 个执行者同时竞争，只有获胜者能写入判断；模拟任务创建成功后丢失回执、重开数据库连接和并发重投，仍只有一个共享任务。还覆盖更换频道拒绝重发旧请求、缺少能力或频道成员身份、过期幂等键停止重试，以及取得通知任务后不能接管别人的工程任务。测试使用官方 SDK 0.30.0 契约构造本机服务，不等于重新验证真实 Raft 服务端的并发实现。
+
+SQLite、MySQL、PostgreSQL 的首次安装流程均以频道模式验证，覆盖 `--task-channel`、成员检查、任务回执、正常落选、获胜者记账和重启；单人 DM 模式另经 SQLite 安装回归。四种数据库的 race 套件与静态检查、构建均通过。
+
+没有向真实频道投递任务或唤醒执行者。实际部署仍需验证频道收信、任务描述读取、原生认领与同机 CLI 访问。实时归属检查和本地写入不构成跨系统事务，交接时须先停止原负责人的执行；不提供自动抢占或永久恰好一次执行保证。未确认创建超过 23 小时后保留待发状态，避免 Raft 的 24 小时幂等窗口过期后重复创建。
 
 ## 数据库选择验证
 
@@ -37,6 +47,6 @@ GitHub 数据源仍为定时采集，未实现 Webhook、速率限制自适应�
 
 ## 协议来源
 
-External 模式按 [Raft API Client](https://docs.raft.build/developers/sdk/api-client/) 与 `@botiverse/raft-sdk` 0.30.0 的 Agent API 契约实现，使用 context 身份读取和带幂等键的 send。参考 [External Agents](https://docs.raft.build/developers/sdk/external-agents/) 了解账号接入。
+External 模式按 [Raft API Client](https://docs.raft.build/developers/sdk/api-client/) 与 `@botiverse/raft-sdk` 0.30.0 的 Agent API 契约实现，使用 context 身份读取、channel-members 成员检查、tasks 创建／查询和带幂等键的 send。参考 [External Agents](https://docs.raft.build/developers/sdk/external-agents/) 了解账号接入。
 
 systemd 文件按官方 [命令行规则](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Command%20lines) 和 [环境变量规则](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#Environment=) 分别处理命令参数、路径与环境变量中的特殊字符。

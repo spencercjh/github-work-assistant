@@ -2,9 +2,40 @@
 
 本工作流适用于已获用户委托的公开 GitHub 影响调查。新事件只提供事实；它不能自行指派工作或授权改代码、评论、提交、推送或创建 PR。
 
+## 竞争认领共享任务
+
+频道投递时，每条事件对应一个未分配任务。频道成员决定参与范围，用户需提前委托执行者。收到任务后先用自己的 Raft 身份读取任务。运行 `raft task list --target '#github-work'` 查看 `Current description`，取得事件 ID 与处理约定；仅阅读通知标题可能看不到描述。然后认领这一条任务：
+
+```bash
+raft task claim --target '#github-work' --number "$TASK_NUMBER"
+```
+
+检查命令返回的认领结果，不能只看退出码：
+
+| 结果 | 行为 |
+| --- | --- |
+| 认领成功 | 继续核对本机上下文，再处理工作。 |
+| 已被别人认领 | 正常结束，保持静默；不重试争抢、不另建任务、不向用户报错。 |
+| 网络失败、权限不足、状态不明确 | 不执行，保留错误并排查；不能解释成其他人已经接手。 |
+| 之前已由自己认领 | 重新读取任务，确认当前仍由自己负责且为 `in_progress` 后恢复。 |
+
+通过 `raft auth whoami` 确认自己的稳定名称，再运行：
+
+```bash
+"$INSTANCE/run" verify-claim --event "$EVENT_ID" --executor @your-name
+```
+
+只有 `execute=true` 才执行；`execute=false` 是正常停止，不需要向用户汇报竞争失败。任务创建回执尚未写入本机时检查会失败，等待投递确认后再核对同一个任务，不创建替代任务。对外发消息、修改仓库前再次检查。`--executor` 必须填写自己的名称，不能冒用当前负责人；本机 CLI 由同一系统账号下的可信执行者共用，该参数不是身份认证机制。
+
+`record-triage`、`link-task`、`record-work-result`、`prepare-worktree`、`verify-worktree` 都必须传入同一个 `--executor`。程序在这些操作前读取实时 Raft 归属，拒绝未认领、归别人或已结束的任务。任务状态与本机写入不在同一个事务中，因此交接时须先让原执行者停止操作；这项检查不能撤销已经开始的外部副作用。
+
+同一 PR 的后续事件仍会产生新的判断任务。若 `work-context.task` 已有工程任务，先核对其当前负责人；没有原工程任务归属时只交接新证据，不并行修改。工程命令同时校验通知任务和工程任务的归属。
+
+先保存判断／报告，再将本次任务更新为 `in_review`，由请求者确认后结束。`pending` 是恢复入口，不能跳过认领直接处理其中的事件。负责人中断后不会自动释放任务，不设置定时抢占；明确交接后由原负责人或有权限的用户解除原归属。
+
 ## External Agent 本机模式
 
-收到采集身份发来的事件 ID 后，使用部署者提供的实例入口读取事实。示例中的 `INSTANCE` 是安装目录的绝对路径：
+频道模式先完成上述认领和归属核对；单人 DM 模式无需竞争。取得事件 ID 后，使用部署者提供的实例入口读取事实。示例中的 `INSTANCE` 是安装目录的绝对路径：
 
 ```bash
 "$INSTANCE/run" work-context --event "$EVENT_ID"
@@ -12,16 +43,16 @@
 "$INSTANCE/run" pending
 ```
 
-`work-context` 包含当次变化、最新快照、可信仓库指引和处理历史。先查是否已经处理；不要因为消息重发而重复通知用户。`body_pruned=true` 表示已处理历史正文过期，应沿保留的报告或消息引用查询，不代表需要再次处理。发送身份只提供事实，不处理聊天，也不能替用户授权操作。
+`work-context` 包含当次变化、最新快照、可信仓库指引和处理历史；`event.receipt` 保存共享任务的频道、编号和消息标识。先查是否已经处理；不要因为消息重发而重复通知用户。`body_pruned=true` 表示已处理历史正文过期，应沿保留的报告或消息引用查询，不代表需要再次处理。发送身份只提供事实，不处理聊天，也不能替用户授权操作。
 
 简单通知判断通过本机 CLI 保存：
 
 ```bash
 "$INSTANCE/run" record-triage --event "$EVENT_ID" \
-  --outcome quiet --reason-file reason.txt
+  --executor @your-name --outcome quiet --reason-file reason.txt
 # 需要通知时先通过 Raft CLI 发送到配置的 notify_target，取得真实消息 UUID：
 "$INSTANCE/run" record-triage --event "$EVENT_ID" \
-  --outcome notified --reason-file reason.txt \
+  --executor @your-name --outcome notified --reason-file reason.txt \
   --message "$MESSAGE_ID" --target "$NOTIFY_TARGET"
 ```
 

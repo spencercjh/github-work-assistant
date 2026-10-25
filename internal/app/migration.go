@@ -123,6 +123,7 @@ func (s *Store) CollectionStatus(ctx context.Context, key string, err error) err
 
 // Only the Agent judges significance; transport acceptance cannot mark processing complete.
 type Triage struct {
+	Executor  string `json:"executor,omitempty"`
 	EventID   string `json:"event_id"`
 	Outcome   string `json:"outcome"`
 	Reason    string `json:"reason"`

@@ -9,12 +9,15 @@ import (
 
 func (s *Store) ReadWork(ctx context.Context, id string) (WorkContext, error) {
 	var w WorkContext
-	var payload, body string
-	err := s.db.QueryRowContext(ctx, `SELECT e.event_id,e.resource_key,e.version_hash,e.payload,e.state,s.body,s.version_hash,s.observed_at FROM ghraft_events e JOIN ghraft_snapshots s ON s.resource_key=e.resource_key WHERE e.event_id=?`, id).Scan(&w.Event.ID, &w.Event.Key, &w.Event.Version, &payload, &w.Event.State, &body, &w.CurrentVersion, &w.ObservedAt)
+	var payload, body, receipt string
+	err := s.db.QueryRowContext(ctx, `SELECT e.event_id,e.resource_key,e.version_hash,e.payload,e.state,COALESCE(e.receipt,''),s.body,s.version_hash,s.observed_at FROM ghraft_events e JOIN ghraft_snapshots s ON s.resource_key=e.resource_key WHERE e.event_id=?`, id).Scan(&w.Event.ID, &w.Event.Key, &w.Event.Version, &payload, &w.Event.State, &receipt, &body, &w.CurrentVersion, &w.ObservedAt)
 	if err != nil {
 		return w, err
 	}
 	w.Event.Payload = json.RawMessage(payload)
+	if receipt != "" {
+		w.Event.Receipt = json.RawMessage(receipt)
+	}
 	w.Snapshot = json.RawMessage(body)
 	link := &TaskLink{}
 	err = s.db.QueryRowContext(ctx, `SELECT task_id,target,event_id,evidence_version,guide_version FROM ghraft_work_links WHERE resource_key=?`, w.Event.Key).Scan(&link.TaskID, &link.Target, &link.EventID, &link.EvidenceVersion, &link.GuideVersion)

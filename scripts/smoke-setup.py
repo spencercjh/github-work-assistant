@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", choices=["sqlite","mysql","postgres"], default="sqlite")
+    parser.add_argument("--delivery", choices=["shared", "dm"], default="shared")
     parser.add_argument("--dsn-file", help="Private disposable server DSN for external-database setup")
     parser.add_argument("--compose-binary", help="Optional standalone Docker Compose executable")
     args = parser.parse_args()
@@ -68,8 +69,9 @@ def main():
         # These are synthetic test identities, not credentials for an actual server.
         identity = {"agent": {"id": "fixture-sender", "name": "collector", "external": True},
                     "server": {"id": "fixture-server", "slug": "fixture"},
-                    "credential": {"capabilities": ["read", "send"]}}
+                    "credential": {"capabilities": ["read", "send", "tasks", "channels"]}}
         received = []
+        task_owner = None
 
         class API(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -84,16 +86,30 @@ def main():
             def do_GET(self):
                 if self.headers.get("Authorization") != "Bearer " + token:
                     return self.reply(401, {})
-                if self.path != "/internal/agent-api/context":
-                    return self.reply(404, {})
-                self.reply(200, identity)
+                path = urlsplit(self.path).path
+                if path == "/internal/agent-api/context":
+                    return self.reply(200, identity)
+                if path == "/internal/agent-api/channel-members":
+                    return self.reply(200, {"channel": {"ref": "#github-work", "type": "channel"},
+                                            "agents": [{"name": "collector"}, {"name": "executor"}]})
+                if path == "/internal/agent-api/tasks":
+                    return self.reply(200, {"tasks": [{"taskNumber": 17, "messageId": "11111111-1111-1111-1111-111111111111",
+                                                      "claimedByName": task_owner, "status": "in_progress" if task_owner else "todo"}]})
+                self.reply(404, {})
 
             def do_POST(self):
                 if self.headers.get("Authorization") != "Bearer " + token:
                     return self.reply(401, {})
-                if self.path != "/internal/agent-api/send":
+                if self.path not in ("/internal/agent-api/send", "/internal/agent-api/tasks"):
                     return self.reply(404, {})
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if args.delivery == "shared":
+                    assert self.path == "/internal/agent-api/tasks"
+                    assert body["channel"] == "#github-work" and len(body["tasks"]) == 1 and "assignee" not in body
+                    assert body["idempotencyKey"].startswith("github-task:")
+                    assert "fixture external prose" not in json.dumps(body)
+                    received.append(body)
+                    return self.reply(200, {"tasks": [{"taskNumber": 17, "messageId": "11111111-1111-1111-1111-111111111111"}]})
                 assert body["target"] == "dm:@executor~agent"
                 assert body["idempotencyKey"].startswith("github:")
                 assert body["continueAnyway"] is True
@@ -141,9 +157,10 @@ print(json.dumps(data))
             port.bind(("127.0.0.1", 0))
             db_port = port.getsockname()[1]
         base = [str(REPO / "bin/ghraft"), "init", "--dir", str(instance), "--raft-token-file", str(root / "token"),
-                "--recipient", "@executor", "--notify", "@owner", "--db-port", str(db_port),
+                "--notify", "@owner", "--db-port", str(db_port),
                 "--raft-api", f"https://127.0.0.1:{server.server_port}"]
         base += ["--database", args.database]
+        base += ["--task-channel", "#github-work"] if args.delivery == "shared" else ["--recipient", "@executor"]
         if args.dsn_file:
             base += ["--dsn-file", str(Path(args.dsn_file).resolve())]
         db = compose + ["-f", str(instance / "database.yml")]
@@ -194,7 +211,15 @@ print(json.dumps(data))
             run(cli + ["deliver"])
             assert len(received) == 1, "restart duplicated an accepted event"
             (root / "reason").write_text("Synthetic fixture needs no user notification.\n")
-            run(cli + ["record-triage", "--event", event, "--outcome", "quiet", "--reason-file", str(root / "reason")])
+            if args.delivery == "shared":
+                verify = cli + ["verify-claim", "--event", event]
+                run(verify + ["--executor", "@executor"], fail=True)  # Still unclaimed.
+                task_owner = "executor"  # Model a successful native Raft claim.
+                assert run(verify + ["--executor", "@executor"], parse=True)["execute"] is True
+                assert run(verify + ["--executor", "@loser"], parse=True)["execute"] is False
+                declined = run(cli + ["record-triage", "--event", event, "--executor", "@loser", "--outcome", "quiet", "--reason-file", str(root / "reason")], parse=True)
+                assert declined["execute"] is False and declined["recorded"] is False
+            run(cli + ["record-triage", "--event", event, "--executor", "@executor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
             assert not run(cli + ["pending"], parse=True)
 
             preview = run(cli + ["cleanup", "--dry-run"], parse=True)
@@ -211,7 +236,7 @@ print(json.dumps(data))
             run(cli + ["serve"], fail=True)
             proc.terminate()
             assert proc.wait(timeout=15) == 0, "service did not stop gracefully"
-            print(f"PASS ({args.database}): private init, no overwrite, migration, diagnostics/auth failure, discovery, delivery, durable processing, restart and service lock; local API fixtures only.")
+            print(f"PASS ({args.database}, {args.delivery}): private init, no overwrite, migration, diagnostics/auth failure, discovery, delivery, claim verification, durable processing, restart and service lock; local API fixtures only.")
         finally:
             if proc is not None and proc.poll() is None:
                 proc.terminate()

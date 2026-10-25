@@ -37,6 +37,9 @@ func (s *Service) Doctor(ctx context.Context) ([]Diagnostic, error) {
 	if s.Config.RaftMode == "external" {
 		_, err = s.Raft.ExternalIdentity(ctx)
 		add("raft_identity", "external identity, server and read/send capabilities match", err)
+		if err == nil && s.Config.SharedTasks() {
+			add("task_channel", "sender is a member of the shared task channel", s.Raft.CheckTaskChannel(ctx))
+		}
 	} else {
 		add("raft_identity", "", errors.New("App mode requires its existing OAuth login; doctor does not request authorization"))
 	}

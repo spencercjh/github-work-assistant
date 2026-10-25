@@ -27,6 +27,7 @@ type WorkContext struct {
 	History        []json.RawMessage `json:"processed_history"`
 }
 type WorkInput struct {
+	Executor        string `json:"executor,omitempty"`
 	EventID         string `json:"event_id"`
 	EvidenceVersion string `json:"evidence_version"`
 	GuideVersion    string `json:"guide_version"`
@@ -45,6 +46,9 @@ var ErrWorkDenied = errors.New("resource is outside current authorization")
 // RecordTriage is shared by local execution clients. It applies the same
 // destination and watch boundary as the authenticated App action.
 func (s *Service) RecordTriage(ctx context.Context, in Triage) error {
+	if err := s.VerifyClaim(ctx, in.EventID, in.Executor); err != nil {
+		return err
+	}
 	if in.Outcome == "notified" && (s.Config.NotifyTarget == "" || in.Target != s.Config.NotifyTarget) {
 		return errors.New("notification destination does not match configuration")
 	}
@@ -113,11 +117,22 @@ func (s *Service) CheckWork(ctx context.Context, in WorkInput) (WorkContext, err
 	if err != nil {
 		return w, err
 	}
+	if err := s.VerifyClaim(ctx, in.EventID, in.Executor); err != nil {
+		return w, err
+	}
 	if w.Stale || in.EvidenceVersion != w.CurrentVersion || in.GuideVersion != w.Guide.Version || w.ObservedAt < time.Now().Add(-10*time.Minute).Unix() {
 		return w, ErrStaleWork
 	}
 	if !uuidRE.MatchString(in.TaskID) {
 		return w, errors.New("a real Raft task UUID is required")
+	}
+	if s.Config.SharedTasks() {
+		if w.Guide.TaskTarget == "" {
+			return w, errors.New("repository task destination is not configured")
+		}
+		if err := s.Raft.verifyTaskOwner(ctx, w.Guide.TaskTarget, 0, in.TaskID, in.Executor); err != nil {
+			return w, err
+		}
 	}
 	return w, nil
 }

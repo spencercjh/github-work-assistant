@@ -102,6 +102,39 @@ func TestInvalidSetupLeavesNoPartialInstance(t *testing.T) {
 	}
 }
 
+func TestSharedChannelSetupAndClaimInstructions(t *testing.T) {
+	o := fixtureOptions(t)
+	o.Recipient, o.TaskChannel = "", "#开发工作"
+	if err := Write(o); err != nil {
+		t.Fatal(err)
+	}
+	c, err := app.LoadConfig(filepath.Join(o.Dir, "config.json"))
+	if err != nil || !c.SharedTasks() || c.DeliveryTarget != o.TaskChannel {
+		t.Fatal("shared channel not configured", err)
+	}
+	guide, err := os.ReadFile(filepath.Join(o.Dir, "EXECUTOR.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phrase := range []string{"raft task claim", "verify-claim", "静默结束", "不重试争抢", "网络失败", "--executor", "频道成员管理"} {
+		if !strings.Contains(string(guide), phrase) {
+			t.Fatal("missing execution instruction", phrase)
+		}
+	}
+	for _, channel := range []string{"#work:12345678", "dm:@worker~agent", "work", "#work\n@intruder"} {
+		o := fixtureOptions(t)
+		o.Recipient, o.TaskChannel = "", channel
+		if err := Write(o); err == nil {
+			t.Fatal("invalid shared channel accepted", channel)
+		}
+	}
+	o = fixtureOptions(t)
+	o.TaskChannel = "#work"
+	if err := Write(o); err == nil {
+		t.Fatal("both delivery modes accepted")
+	}
+}
+
 func TestSelectableStorageDoesNotProvisionUnwantedDatabase(t *testing.T) {
 	for _, backend := range []string{"sqlite", "mysql", "seekdb", "tidb", "postgres"} {
 		t.Run(backend, func(t *testing.T) {

@@ -38,6 +38,7 @@ type Options struct {
 	Identity    app.ExternalIdentity
 	GitHubLogin string
 	Recipient   string
+	TaskChannel string
 	Notify      string
 	RaftAPI     string
 	Port        int
@@ -50,6 +51,7 @@ func Init(args []string, out io.Writer) error {
 	dir := f.String("dir", "state/assistant", "New, private instance directory")
 	tokenFile := f.String("raft-token-file", "", "Private file containing this installation's External Agent credential")
 	recipient := f.String("recipient", "", "Existing execution agent handle, for example @reviewer")
+	taskChannel := f.String("task-channel", "", "Shared task channel whose agents compete to claim work, for example #github-work")
 	notify := f.String("notify", "", "Optional human handle to receive useful findings")
 	api := f.String("raft-api", "https://api.raft.build", "Raft API HTTPS origin")
 	backend := f.String("database", "sqlite", "Persistence backend: sqlite, mysql, seekdb, tidb, postgres")
@@ -63,8 +65,8 @@ func Init(args []string, out io.Writer) error {
 	if f.NArg() != 0 {
 		return errors.New("unexpected init arguments")
 	}
-	if *tokenFile == "" || *recipient == "" {
-		return errors.New("init requires --raft-token-file and --recipient; see docs/QUICKSTART.md")
+	if *tokenFile == "" || ((*recipient == "") == (*taskChannel == "")) {
+		return errors.New("init requires --raft-token-file and exactly one of --task-channel or --recipient; see docs/QUICKSTART.md")
 	}
 	apiURL, err := url.Parse(*api)
 	if err != nil || apiURL.Scheme != "https" || apiURL.Host == "" || apiURL.User != nil || apiURL.RawQuery != "" || apiURL.Fragment != "" || strings.Trim(apiURL.Path, "/") != "" {
@@ -73,7 +75,7 @@ func Init(args []string, out io.Writer) error {
 	if *backend == "mysql" && *dsnFile == "" && (*port < 1024 || *port > 65535) {
 		return errors.New("--db-port must be 1024..65535")
 	}
-	if !handleRE.MatchString(*recipient) || (*notify != "" && !handleRE.MatchString(*notify)) {
+	if (*recipient != "" && !handleRE.MatchString(*recipient)) || (*notify != "" && !handleRE.MatchString(*notify)) {
 		return errors.New("invalid recipient or notification handle")
 	}
 	if _, err := os.Lstat(*dir); !os.IsNotExist(err) {
@@ -102,10 +104,15 @@ func Init(args []string, out io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	r := &app.Raft{Config: app.Config{RaftAPI: strings.TrimRight(*api, "/")}, Credential: string(token), HTTP: app.SafeHTTP()}
+	r := &app.Raft{Config: app.Config{RaftAPI: strings.TrimRight(*api, "/"), RaftMode: "external", DeliveryTarget: *taskChannel}, Credential: string(token), HTTP: app.SafeHTTP()}
 	identity, err := r.ExternalIdentity(ctx)
 	if err != nil {
 		return fmt.Errorf("Raft identity check: %w", err)
+	}
+	if *taskChannel != "" {
+		if err := r.CheckTaskChannel(ctx); err != nil {
+			return err
+		}
 	}
 	cmd := exec.CommandContext(ctx, "gh", "api", "--hostname", "github.com", "--method", "GET", "user", "--jq", ".login")
 	b, err := cmd.Output()
@@ -134,7 +141,7 @@ func Init(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	o := Options{Database: *backend, DSN: dsn, SQLitePath: *sqlitePath, Dir: *dir, Executable: executable, Token: token, Identity: identity, GitHubLogin: login, Recipient: *recipient, Notify: *notify, RaftAPI: r.Config.RaftAPI, Port: *port, Watches: parsed}
+	o := Options{Database: *backend, DSN: dsn, SQLitePath: *sqlitePath, Dir: *dir, Executable: executable, Token: token, Identity: identity, GitHubLogin: login, Recipient: *recipient, TaskChannel: *taskChannel, Notify: *notify, RaftAPI: r.Config.RaftAPI, Port: *port, Watches: parsed}
 	if err := Write(o); err != nil {
 		return err
 	}
@@ -188,7 +195,13 @@ func Write(o Options) error {
 	if _, err = os.Lstat(root); !os.IsNotExist(err) {
 		return errors.New("instance directory already exists; refusing overwrite")
 	}
-	if !handleRE.MatchString(o.Recipient) || (o.Notify != "" && !handleRE.MatchString(o.Notify)) {
+	if (o.Recipient == "") == (o.TaskChannel == "") {
+		return errors.New("choose exactly one task channel or single recipient")
+	}
+	if o.TaskChannel != "" && !strings.HasPrefix(o.TaskChannel, "#") {
+		return errors.New("--task-channel requires a top-level channel")
+	}
+	if (o.Recipient != "" && !handleRE.MatchString(o.Recipient)) || (o.Notify != "" && !handleRE.MatchString(o.Notify)) {
 		return errors.New("invalid handle")
 	}
 	recipient := strings.TrimSuffix(strings.TrimPrefix(o.Recipient, "@"), "~agent")
@@ -229,6 +242,9 @@ func Write(o Options) error {
 		notify = "dm:@" + strings.TrimSuffix(strings.TrimPrefix(o.Notify, "@"), "~human") + "~human"
 	}
 	c := app.Config{DatabaseDriver: o.Database, RaftMode: "external", ExternalAgent: o.Identity.Agent.ID, ServerID: o.Identity.Server.ID, ServerSlug: o.Identity.Server.Slug, RaftAPI: o.RaftAPI, GitHubLogin: o.GitHubLogin, DeliveryTarget: "dm:@" + recipient + "~agent", PollSeconds: 120, Discover: true, Watches: o.Watches, NotifyTarget: notify, LookbackHours: 6, HistoryRetentionDays: 30, WorkspaceRoot: filepath.Join(root, "worktrees")}
+	if o.TaskChannel != "" {
+		c.DeliveryTarget = o.TaskChannel
+	}
 	config, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
@@ -277,7 +293,7 @@ WantedBy=default.target
 		"private/key":        []byte(key + "\n"),
 		"private/raft-token": append(append([]byte{}, o.Token...), '\n'),
 		"run":                []byte(run), name + ".service": []byte(unit),
-		"EXECUTOR.md": []byte(executorGuide(root, notify)),
+		"EXECUTOR.md": []byte(executorGuide(root, notify, o.TaskChannel)),
 	}
 	if kind == "sqlite" {
 		path := o.SQLitePath
@@ -320,15 +336,38 @@ func unitQuote(s string) string {
 	return "\"" + s + "\""
 }
 
-func executorGuide(root, notify string) string {
+func executorGuide(root, notify, channel string) string {
 	if notify == "" {
 		notify = "尚未配置；请在已有用户对话中交付，不要自行选择收件人"
+	}
+	competition := ""
+	if channel != "" {
+		competition = fmt.Sprintf(`
+## 先认领共享任务
+
+任务发布到 %s，执行者由频道成员管理。先用 raft task list --target <工作频道> 读取任务的 Current description，取得事件 ID 与操作约定；仅阅读通知标题可能看不到描述。使用你自己的 Raft 身份读取任务，再运行：
+
+    raft task claim --target %s --number <本任务编号>
+
+认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。恢复自己的工作时先读取当前任务，确认仍由自己负责且为 in_progress。
+
+认领后以 raft auth whoami 确认自己的稳定名称，并运行：
+
+    %s verify-claim --event <事件ID> --executor @你的名称
+
+只有 execute=true 才执行。execute=false 表示已由别人负责或已结束，静默退出；投递回执尚未落库时等待本次投递确认，不另建任务。程序连接失败时不执行。该检查使用实时任务归属；--executor 不能填写别人的名称。所有 Agent 共享本机账号，这个参数用于检查协作流程，不提供系统用户隔离。
+
+record-triage、link-task、record-work-result、prepare-worktree、verify-worktree 都要带同一个 --executor；写入前会再次核对任务归属。向用户发送消息或修改仓库前也要重新 verify-claim。已经处理的事件不重复执行。同一 PR 的新事件会有新的判断任务，但已有工程任务继续由其负责人处理；读取 work-context.task，未取得原工程任务归属时只交接，不并行修改。
+
+完成判断后先保存本机结果，再把共享任务更新为 in_review，按用户确认结束。中断不会自动释放任务；只有明确交接后才由原负责人或有权限的用户解除归属。不要设置自动抢占或定时重抢。
+`, channel, shellQuote(channel), shellQuote(filepath.Join(root, "run")))
 	}
 	return fmt.Sprintf(`# GitHub 助手工作说明
 
 这份安装的采集程序向你发送 GitHub 变化通知；程序只采集公开事项，不调用模型、不执行仓库代码。请在同一台机器、同一个操作系统账号下读取下面的本地 CLI。人在与你的对话中提出需求；不要向采集程序询问问题，它不处理聊天。
 
-收到事件 ID 后，运行：
+%s
+收到事件 ID 并取得工作归属后，运行：
 
     %s work-context --event <事件ID>
 
@@ -337,5 +376,5 @@ func executorGuide(root, notify string) string {
 上下文中的仓库指引决定本地操作范围。未配置仓库指引时默认只读；需要工程执行时由部署者在 config.json 的 repositories 中配置可信本地指引。已有工作应续接原记录，完成后使用 record-work-result 保存报告及证据版本。简单通知判断用 record-triage 记录 quiet 或 notified；后者须先真正发送通知，再保存消息 UUID 和配置的目标。pending 可列出尚未判断的事件。完整命令见仓库 docs/AGENT-WORKFLOW.md；不要把投递成功当作处理完成。
 
 需要提醒的用户：%s。只有值得用户关注的变化才汇报，并附来源。不要将本目录 private/ 中的文件内容写进消息、报告或日志。
-`, shellQuote(filepath.Join(root, "run")), notify)
+`, competition, shellQuote(filepath.Join(root, "run")), notify)
 }

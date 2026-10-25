@@ -297,7 +297,7 @@ func TestWorkActionsAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := WorkInput{event.ID, event.Version, w.Guide.Version, fixtureTask}
+	in := WorkInput{EventID: event.ID, EvidenceVersion: event.Version, GuideVersion: w.Guide.Version, TaskID: fixtureTask}
 	if code := request("link-task", in, true); code != 200 {
 		t.Fatal("link action", code)
 	}

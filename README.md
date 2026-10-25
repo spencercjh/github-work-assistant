@@ -1,21 +1,23 @@
 # GitHub Work Assistant for Raft
 
-把你关注的公开 GitHub Issue、PR、评审和 CI 变化送到 Raft，由你指定的执行 Agent 判断哪些变化值得提醒，或继续已获授权的仓库工作。
+把你关注的公开 GitHub Issue、PR、评审和 CI 变化送到 Raft，由工作频道中的执行 Agent 竞争认领，判断哪些变化值得提醒，或继续已获授权的仓库工作。
 
-每人部署一套。程序使用你已有的 `gh` 登录采集事实，以独立 **External Agent** 身份向执行 Agent 发消息；执行 Agent 在同一台机器读取本地证据。程序不调用模型，模型和工作执行由 Raft 管理。
+每人部署一套。程序使用你已有的 `gh` 登录采集事实，以独立 **External Agent** 身份向工作频道发布未分配任务；成功认领的 Agent 在同一台机器读取本地证据。程序不调用模型，模型和工作执行由 Raft 管理。
 
 ```mermaid
 flowchart LR
   GH[GitHub Notifications / Issue / PR] -->|只读 API| C[本机 Go 采集程序]
   C --> DB[(SQLite / MySQL / PostgreSQL：快照、待发事件、处理记录)]
-  C -->|External Agent 消息，出站 HTTPS| R[Raft 执行 Agent]
+  C -->|External Agent 创建任务，出站 HTTPS| T[Raft 工作频道]
+  T -->|竞争认领，成功者处理| R[执行 Agent]
+  T -->|已被别人认领| Q[正常结束，不报错]
   R -->|本机 CLI| DB
   R --> U[向用户汇报 / 继续已授权工作]
 ```
 
 ## 快速开始
 
-在运行 Raft 执行 Agent 的 Linux 电脑上，使用同一个操作系统账号准备 Go 1.27.3+ 和 GitHub CLI。默认使用本地 SQLite 文件；选择新建 MySQL 容器时才需要 Docker 和 Compose 插件。用 `gh auth login --hostname github.com` 登录自己的 GitHub 账号。在 Raft 创建一个独立的 External Agent，并取得它的登录 token；另外选择一个已有的执行 Agent。两者不能是同一身份。
+在运行 Raft 执行 Agent 的 Linux 电脑上，使用同一个操作系统账号准备 Go 1.27.3+ 和 GitHub CLI。默认使用本地 SQLite 文件；选择新建 MySQL 容器时才需要 Docker 和 Compose 插件。用 `gh auth login --hostname github.com` 登录自己的 GitHub 账号。在 Raft 创建一个独立的 External Agent，并取得它的登录 token；将采集身份和希望参与的执行 Agent 加入同一个工作频道。采集身份只负责发布任务。
 
 ```bash
 gh repo clone spencercjh/github-work-assistant
@@ -23,9 +25,9 @@ cd github-work-assistant
 make setup
 ```
 
-安装向导先选择存储位置：本地 SQLite、新建 MySQL 容器，或已有 MySQL／seekdb／TiDB／PostgreSQL。随后填写执行 Agent 名称、可选的通知收件人，并隐藏输入 External Agent token。向导核对身份、生成私有配置、初始化表结构并执行诊断。已有安装不会被覆盖。各后端的连接方式和验证范围见[存储配置](docs/STORAGE.md)。
+安装向导先选择存储位置：本地 SQLite、新建 MySQL 容器，或已有 MySQL／seekdb／TiDB／PostgreSQL。随后填写工作频道、可选的通知收件人，并隐藏输入 External Agent token。向导核对身份、生成私有配置、初始化表结构并执行诊断。已有安装不会被覆盖。各后端的连接方式和验证范围见[存储配置](docs/STORAGE.md)。
 
-把生成的 `state/assistant/EXECUTOR.md` 路径交给执行 Agent，并明确委托它处理这些通知。然后启动采集：
+把生成的 `state/assistant/EXECUTOR.md` 路径交给频道里的执行 Agent，并明确委托它处理这些通知。然后启动采集：
 
 ```bash
 state/assistant/run serve
@@ -34,6 +36,8 @@ state/assistant/run serve
 新安装无需注册 Raft App，也无需域名或公网入站端口。完整的凭据取得、后台启动、验证和故障恢复步骤见 **[快速部署](docs/QUICKSTART.md)**。
 
 ## 能做什么
+
+- 只配置任务频道，由用户管理频道成员。每个事件创建一个共享任务，认领成功者执行；落选者静默结束，不重试争抢、不另建任务。
 
 - 从 GitHub Notifications 自动发现公开 Issue／PR，也支持配置固定关注对象。评论、评审、时间线及当前 head 的检查会完整翻页读取；响应过大时显式报错。
 - 快照和待发事件一起持久化。发送失败保留待发状态并退避重试；完整消息请求在首次发送前保存，重启后使用相同幂等键和内容重试。
@@ -61,7 +65,7 @@ python3 scripts/smoke-setup.py
 python3 scripts/smoke-setup.py --database mysql
 ```
 
-当前支持单用户、单执行 Agent、单机部署。默认每 120 秒查询 GitHub，尚未实现 Webhook、私有仓库采集、多租户服务或跨主机执行。轮询快照无法保证还原采集间隔内出现后又被删除的内容；幂等写也不能替代执行 Agent 的重复事件检查。
+当前支持单用户、多执行 Agent、单机部署。默认每 120 秒查询 GitHub，尚未实现 Webhook、私有仓库采集、多租户服务或跨主机执行。轮询快照无法保证还原采集间隔内出现后又被删除的内容；幂等写也不能替代执行 Agent 的重复事件检查。
 
 External Agent 接口按官方 SDK 0.30.0 的契约实现。协议模拟测试不等于真实账号完成登录、收信和处理；部署者应完成快速部署中的实际接收验证。
 
