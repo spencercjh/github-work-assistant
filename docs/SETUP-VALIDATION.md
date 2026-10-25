@@ -4,7 +4,7 @@
 
 ## 数据库选择验证
 
-当前业务存储接口由 GORM 实现，默认安装使用本地 SQLite，可选择 MySQL、seekdb、TiDB 或 PostgreSQL 连接。SQLite、MySQL 8.4、PostgreSQL 18、seekdb 1.4.0.0 均通过同一套完整 race 测试，包括两个独立连接竞争首次写入、不同任务绑定冲突、数据库约束失败后的事务回滚，以及重启去重和过期证据拒绝。
+当前业务存储接口由 GORM 实现，默认安装使用本地 SQLite，可选择 MySQL、seekdb、TiDB 或 PostgreSQL 连接。SQLite、MySQL 8.4、PostgreSQL 18、seekdb 1.4.0.0 均通过同一套完整 race 测试，包括两个独立连接竞争首次写入、不同任务绑定冲突、待发事件写入失败后的事务回滚，以及重启去重和过期证据拒绝。
 
 从空目录分别验证了默认 SQLite、新建 MySQL 容器、已有 PostgreSQL 三种安装方式：初始化、迁移、只读诊断、认证失败、收集投递、处理记账、重启与重复实例保护均通过。SQLite 诊断不会创建缺失的数据库。编译入口关闭 CGO，SQLite 使用纯 Go 驱动。
 

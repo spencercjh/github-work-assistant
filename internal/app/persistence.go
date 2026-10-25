@@ -39,7 +39,6 @@ type Persistence interface {
 	Cleanup(context.Context, int, bool) (CleanupStats, error)
 	CollectionStatus(context.Context, string, error) error
 	RecordTriage(context.Context, Triage) error
-	Unprocessed(context.Context) ([]map[string]any, error)
 	UnprocessedPage(context.Context, int) ([]map[string]any, error)
 	ImportLegacy(context.Context, Config, []byte) error
 	History(context.Context, string) ([]json.RawMessage, error)

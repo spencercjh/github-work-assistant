@@ -10,11 +10,10 @@ import (
 )
 
 // Exercise the actual gh subprocess boundary. No command can fall back to live GitHub.
-func fakeGH(t *testing.T, head, base string) (GH, string, string) {
+func fakeGH(t *testing.T, head, base string) (GH, string) {
 	t.Helper()
 	dir := t.TempDir()
 	fixture := filepath.Join(dir, "responses.json")
-	log := filepath.Join(dir, "requests.log")
 	script := `#!/usr/bin/env python3
 import json, os, sys
 a=sys.argv[1:]
@@ -22,7 +21,6 @@ if len(a)<6 or a[:5]!=['api','--hostname','github.com','--method','GET']:
     sys.exit('non-read-only gh call rejected')
 if a[6:] not in ([],['--paginate','--slurp']):
     sys.exit('unsupported gh arguments')
-with open(os.environ['GHRAFT_FIXTURE_LOG'],'a') as f: f.write(json.dumps(a)+'\n')
 with open(os.environ['GHRAFT_FIXTURE']) as f: data=json.load(f)
 p=a[5]
 if p not in data: sys.exit('unconfigured fixture endpoint')
@@ -33,7 +31,6 @@ print(json.dumps(data[p]))
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GHRAFT_FIXTURE", fixture)
-	t.Setenv("GHRAFT_FIXTURE_LOG", log)
 	data := map[string]any{
 		"user":                           map[string]any{"login": "fixture-user"},
 		"repos/example/fixture":          map[string]any{"full_name": "example/fixture", "private": false},
@@ -45,7 +42,7 @@ print(json.dumps(data[p]))
 	}
 	data["repos/example/fixture/commits/"+head+"/check-runs?per_page=100"] = []any{map[string]any{"check_runs": []any{}}}
 	writeFixture(t, fixture, data)
-	return GH{Login: "fixture-user"}, fixture, log
+	return GH{Login: "fixture-user"}, fixture
 }
 func writeFixture(t *testing.T, path string, data map[string]any) {
 	t.Helper()
@@ -72,13 +69,17 @@ func readFixture(t *testing.T, path string) map[string]any {
 
 func TestCollectorRecordsExactRevisionsAndUnknown(t *testing.T) {
 	head, base := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	g, path, log := fakeGH(t, head, base)
+	g, path := fakeGH(t, head, base)
 	if err := g.CheckIdentity(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	for _, value := range []any{nil, false, true} {
 		data := readFixture(t, path)
 		obj(data["repos/example/fixture/pulls/1"])["mergeable"] = value
+		data["repos/example/fixture/issues/1/comments?per_page=100"] = []any{
+			[]any{map[string]any{"id": 1, "body": "first page"}},
+			[]any{map[string]any{"id": 2, "body": "second page"}},
+		}
 		writeFixture(t, path, data)
 		b, err := g.Collect(context.Background(), Watch{"example/fixture", 1})
 		if err != nil {
@@ -99,18 +100,14 @@ func TestCollectorRecordsExactRevisionsAndUnknown(t *testing.T) {
 		if p["head"] != head || p["base_sha"] != base || p["conflict_status"] != want {
 			t.Fatal("revision or nullable mergeability lost", p)
 		}
-	}
-	requests, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(requests), "POST") || strings.Contains(string(requests), "PATCH") {
-		t.Fatal("GitHub write attempted")
+		if s.Objects["comment:1"]["body"] != "first page" || s.Objects["comment:2"]["body"] != "second page" {
+			t.Fatal("collector lost a comment page")
+		}
 	}
 	data := readFixture(t, path)
 	obj(data["repos/example/fixture"])["private"] = true
 	writeFixture(t, path, data)
-	if _, err = g.Collect(context.Background(), Watch{"example/fixture", 1}); err != ErrNotPublic {
+	if _, err := g.Collect(context.Background(), Watch{"example/fixture", 1}); err != ErrNotPublic {
 		t.Fatal("private data collection not denied", err)
 	}
 }

@@ -129,17 +129,11 @@ func (d *DB) ExecContext(ctx context.Context, q string, args ...any) (int64, err
 	result := d.Session(ctx).Exec(q, args...)
 	return result.RowsAffected, result.Error
 }
-func (d *DB) Exec(q string, args ...any) (int64, error) {
-	return d.ExecContext(context.Background(), q, args...)
-}
 func (d *DB) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
 	return d.Session(ctx).Raw(q, args...).Rows()
 }
 func (d *DB) QueryRowContext(ctx context.Context, q string, args ...any) Row {
 	return Row{d.Session(ctx).Raw(q, args...).Row()}
-}
-func (d *DB) QueryRow(q string, args ...any) Row {
-	return d.QueryRowContext(context.Background(), q, args...)
 }
 
 type Row struct{ row *sql.Row }
@@ -167,15 +161,6 @@ func upsert(db *gorm.DB, value any, keys, updates []string) error {
 func (d *DB) Upsert(ctx context.Context, value any, keys, updates []string) error {
 	return upsert(d.Session(ctx), value, keys, updates)
 }
-func (d *DB) Version(ctx context.Context) (string, error) {
-	q := "SELECT VERSION()"
-	if d.Kind == "sqlite" {
-		q = "SELECT sqlite_version()"
-	}
-	var v string
-	err := d.QueryRowContext(ctx, q).Scan(&v)
-	return v, err
-}
 
 type resourceLock struct {
 	Name string `gorm:"size:300;primaryKey"`
@@ -187,10 +172,6 @@ func (resourceLock) TableName() string { return "ghraft_locks" }
 type Tx struct{ orm *gorm.DB }
 
 func (t *Tx) Session(ctx context.Context) *gorm.DB { return t.orm.WithContext(ctx) }
-func (t *Tx) ExecContext(ctx context.Context, q string, args ...any) (int64, error) {
-	r := t.Session(ctx).Exec(q, args...)
-	return r.RowsAffected, r.Error
-}
 func (t *Tx) QueryRowContext(ctx context.Context, q string, args ...any) Row {
 	return Row{t.Session(ctx).Raw(q, args...).Row()}
 }

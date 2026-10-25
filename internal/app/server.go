@@ -35,11 +35,6 @@ func (s *Service) Collect(ctx context.Context) error {
 	}
 
 	var errs []error
-	for _, w := range s.Config.Watches {
-		if e := s.Store.RegisterWatch(ctx, w); e != nil {
-			return e
-		}
-	}
 	if s.Config.Discover {
 		if g, ok := s.GH.(interface {
 			Discover(context.Context, string) ([]Watch, string, error)

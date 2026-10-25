@@ -32,7 +32,7 @@ func TestRetentionPreservesRecoveryAndImmutableResults(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := s.db.Exec("UPDATE ghraft_events SET created_at=?,accepted_at=? WHERE event_id=?", old, acceptedAt, id); err != nil {
+		if _, err := s.db.ExecContext(ctx, "UPDATE ghraft_events SET created_at=?,accepted_at=? WHERE event_id=?", old, acceptedAt, id); err != nil {
 			t.Fatal(err)
 		}
 		triage := Triage{EventID: id, Outcome: "quiet", Reason: strings.Repeat("reason ", 1000)}
@@ -40,7 +40,7 @@ func TestRetentionPreservesRecoveryAndImmutableResults(t *testing.T) {
 			if err := s.RecordTriage(ctx, triage); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.db.Exec("UPDATE ghraft_triage SET created_at=?,body_hash='' WHERE event_id=?", processedAt, id); err != nil {
+			if _, err := s.db.ExecContext(ctx, "UPDATE ghraft_triage SET created_at=?,body_hash='' WHERE event_id=?", processedAt, id); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -131,11 +131,7 @@ func TestRetentionPreservesRecoveryAndImmutableResults(t *testing.T) {
 		t.Fatal("discovery cursor lost")
 	}
 	// Reopen before replaying acknowledgements: fingerprints must be durable.
-	reopened, err := openTestStore(t, ctx, disposableTestDSN(t), bytes.Repeat([]byte{1}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
+	reopened := openTestStore(t)
 	if err := reopened.RecordTriage(ctx, triage); err != nil {
 		t.Fatal("compacted triage retry failed", err)
 	}
@@ -162,7 +158,7 @@ func TestRetentionPreservesRecoveryAndImmutableResults(t *testing.T) {
 			t.Fatal("history still retains prose", string(h))
 		}
 	}
-	remaining, err := reopened.Unprocessed(ctx)
+	remaining, err := reopened.UnprocessedPage(ctx, 0)
 	if err != nil || len(remaining) != 2 {
 		t.Fatal("processed events reappeared", err, remaining)
 	}
@@ -220,10 +216,10 @@ func TestRetentionUpgradeDoesNotImmediatelyDiscardOldHistory(t *testing.T) {
 	if err := s.RecordTriage(ctx, Triage{EventID: id, Outcome: "quiet", Reason: "old reason"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec("UPDATE ghraft_triage SET created_at=1 WHERE event_id=?", id); err != nil {
+	if _, err := s.db.ExecContext(ctx, "UPDATE ghraft_triage SET created_at=1 WHERE event_id=?", id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec("UPDATE ghraft_events SET created_at=1,accepted_at=0 WHERE event_id=?", id); err != nil {
+	if _, err := s.db.ExecContext(ctx, "UPDATE ghraft_events SET created_at=1,accepted_at=0 WHERE event_id=?", id); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.Session(ctx).Create(&legacyRecord{Marker: "legacy", Body: `{"watch":"example/fixture#1"}`}).Error; err != nil {
@@ -237,7 +233,7 @@ func TestRetentionUpgradeDoesNotImmediatelyDiscardOldHistory(t *testing.T) {
 		t.Fatal("unknown completion time guessed from capture time", stats, err)
 	}
 	// Malformed stored evidence rolls back all body changes for that event.
-	if _, err := s.db.Exec("UPDATE ghraft_events SET accepted_at=1,payload='invalid' WHERE event_id=?", id); err != nil {
+	if _, err := s.db.ExecContext(ctx, "UPDATE ghraft_events SET accepted_at=1,payload='invalid' WHERE event_id=?", id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Cleanup(ctx, 30, false); err == nil {
@@ -267,21 +263,17 @@ func TestCleanupPaginationAndConcurrentReports(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.db.Exec("UPDATE ghraft_events SET accepted_at=?", old); err != nil {
+	if _, err := s.db.ExecContext(ctx, "UPDATE ghraft_events SET accepted_at=?", old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec("UPDATE ghraft_triage SET created_at=?", old); err != nil {
+	if _, err := s.db.ExecContext(ctx, "UPDATE ghraft_triage SET created_at=?", old); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := s.Cleanup(ctx, 30, true)
 	if err != nil || preview.Events != 101 {
 		t.Fatal("cleanup stopped at first page", preview, err)
 	}
-	other, err := openTestStore(t, ctx, disposableTestDSN(t), bytes.Repeat([]byte{1}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
+	other := openTestStore(t)
 	done := make(chan error, 2)
 	go func() {
 		_, err := s.Cleanup(ctx, 30, false)

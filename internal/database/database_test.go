@@ -21,10 +21,10 @@ func TestSQLitePrivateFileAndReadOnlyOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec("CREATE TABLE check_data(value TEXT)"); err != nil {
+	if _, err = db.ExecContext(ctx, "CREATE TABLE check_data(value TEXT)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec("INSERT INTO check_data(value) VALUES(?)", "preserved"); err != nil {
+	if _, err = db.ExecContext(ctx, "INSERT INTO check_data(value) VALUES(?)", "preserved"); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -34,7 +34,7 @@ func TestSQLitePrivateFileAndReadOnlyOpen(t *testing.T) {
 	}
 	defer db.Close()
 	var value string
-	if err = db.QueryRow("SELECT value FROM check_data").Scan(&value); err != nil || value != "preserved" {
+	if err = db.QueryRowContext(ctx, "SELECT value FROM check_data").Scan(&value); err != nil || value != "preserved" {
 		t.Fatal("reopen lost data", err)
 	}
 	link := filepath.Join(filepath.Dir(path), "symlink.sqlite")

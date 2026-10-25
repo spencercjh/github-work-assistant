@@ -18,8 +18,7 @@ type GitHub interface {
 	Collect(context.Context, Watch) ([]byte, error)
 }
 type GH struct {
-	Login  string
-	Config Config
+	Login string
 }
 
 // gh controls GitHub credentials. No token is copied into this App or sent to Raft.
@@ -67,60 +66,4 @@ func (g GH) CheckIdentity(ctx context.Context) error {
 		return errors.New("gh login does not match configured github_login")
 	}
 	return nil
-}
-func object(b []byte) (map[string]json.RawMessage, error) {
-	var m map[string]json.RawMessage
-	e := json.Unmarshal(b, &m)
-	return m, e
-}
-func selectFields(m map[string]json.RawMessage, keys ...string) map[string]json.RawMessage {
-	n := map[string]json.RawMessage{}
-	for _, k := range keys {
-		if v, ok := m[k]; ok {
-			n[k] = v
-		}
-	}
-	return n
-}
-func discussion(raw []byte) ([]map[string]json.RawMessage, error) {
-	var pages [][]map[string]json.RawMessage
-	if e := json.Unmarshal(raw, &pages); e != nil {
-		return nil, e
-	}
-	out := []map[string]json.RawMessage{}
-	for _, page := range pages {
-		for _, m := range page {
-			n := selectFields(m, "id", "html_url", "body", "created_at", "updated_at", "submitted_at", "state", "commit_id", "path", "line", "in_reply_to_id")
-			var u map[string]json.RawMessage
-			json.Unmarshal(m["user"], &u)
-			n["user"], _ = json.Marshal(selectFields(u, "login", "type"))
-			out = append(out, n)
-		}
-	}
-	return out, nil
-}
-func checkData(raw []byte, kind string) ([]map[string]json.RawMessage, error) {
-	var pages []json.RawMessage
-	if e := json.Unmarshal(raw, &pages); e != nil {
-		return nil, e
-	}
-	out := []map[string]json.RawMessage{}
-	for _, page := range pages {
-		var items []map[string]json.RawMessage
-		if kind == "checks" {
-			var p struct {
-				Checks []map[string]json.RawMessage `json:"check_runs"`
-			}
-			if e := json.Unmarshal(page, &p); e != nil {
-				return nil, e
-			}
-			items = p.Checks
-		} else if e := json.Unmarshal(page, &items); e != nil {
-			return nil, e
-		}
-		for _, m := range items {
-			out = append(out, selectFields(m, "id", "name", "status", "conclusion", "details_url", "context", "state", "target_url", "description"))
-		}
-	}
-	return out, nil
 }

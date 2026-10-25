@@ -85,19 +85,6 @@ func TestRaftIdentityBindingAndRedirect(t *testing.T) {
 		t.Fatal("credential redirect not rejected")
 	}
 }
-func TestNormalizationKeepsEditsAndDropsUserNoise(t *testing.T) {
-	a, _ := discussion([]byte(`[[{"id":1,"body":"old","user":{"login":"u","followers":1}}]]`))
-	b, _ := discussion([]byte(`[[{"id":1,"body":"old","user":{"login":"u","followers":2}}]]`))
-	aa, _ := json.Marshal(a)
-	bb, _ := json.Marshal(b)
-	if string(aa) != string(bb) {
-		t.Fatal("account noise changes evidence")
-	}
-	c, _ := discussion([]byte(`[[{"id":1,"body":"new","user":{"login":"u"}}],[{"id":2,"body":"second"}]]`))
-	if len(c) != 2 || string(c[0]["body"]) != `"new"` {
-		t.Fatal("pagination or edit lost")
-	}
-}
 func TestManifestPublicContract(t *testing.T) {
 	s := Service{Config: Config{Origin: "https://app.example", ClientID: "ghraft"}}
 	m := s.Manifest()

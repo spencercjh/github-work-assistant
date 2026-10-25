@@ -22,10 +22,6 @@ type Store struct {
 	LookbackHours int
 }
 
-func OpenStore(ctx context.Context, dsn string, key []byte) (*Store, error) {
-	return OpenStoreBackend(ctx, "mysql", dsn, key, false)
-}
-
 // OpenStoreBackend is the SQL implementation's composition point. New backends
 // implement Persistence; driver and dialect selection stay out of services.
 func OpenStoreBackend(ctx context.Context, driver, dsn string, key []byte, create bool) (*Store, error) {

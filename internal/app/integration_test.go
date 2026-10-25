@@ -13,29 +13,11 @@ import (
 	"time"
 )
 
-// Requires an isolated disposable database. This suite uses real MySQL/seekdb SQL,
-// while only the Raft API is a protocol fixture; it is NOT a live Raft acceptance test.
+// Exercise real persistence and the App OAuth protocol against a local HTTP
+// fixture. This is not a live Raft acceptance test.
 func TestDatabaseAndRaftProtocol(t *testing.T) {
-	dsn := []byte(disposableTestDSN(t))
 	ctx := context.Background()
-	store, e := openTestStore(t, ctx, strings.TrimSpace(string(dsn)), bytes.Repeat([]byte{1}, 32))
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer store.db.Close()
-	version, e := store.db.Version(ctx)
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Log("database:", version)
-	if e = store.Migrate(ctx); e != nil {
-		t.Fatal(e)
-	}
-	for _, table := range []string{"ghraft_watch_access", "ghraft_work_links", "ghraft_triage", "ghraft_legacy_history", "ghraft_meta", "ghraft_watches", "ghraft_results", "ghraft_events", "ghraft_snapshots", "ghraft_private"} {
-		if _, e = store.db.Exec("DELETE FROM " + table); e != nil {
-			t.Fatal(e)
-		}
-	}
+	store := freshTestStore(t)
 	key := "project-hami/hami#3259"
 	id, e := store.Observe(ctx, key, []byte(`{"title":"A"}`))
 	if e != nil || id == "" {
@@ -53,11 +35,7 @@ func TestDatabaseAndRaftProtocol(t *testing.T) {
 		t.Fatal("A->B->A transition lost")
 	}
 	// Reopen to demonstrate persistent outbox across process/store lifetimes.
-	reopened, e := openTestStore(t, ctx, strings.TrimSpace(string(dsn)), bytes.Repeat([]byte{1}, 32))
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer reopened.db.Close()
+	reopened := openTestStore(t)
 	events, e := reopened.Events(ctx, true)
 	if e != nil || len(events) != 3 {
 		t.Fatalf("outbox persistence %d %v", len(events), e)
@@ -133,18 +111,20 @@ func TestDatabaseAndRaftProtocol(t *testing.T) {
 		t.Fatal(e)
 	}
 	var retryAt int64
-	if e = store.db.QueryRow(`SELECT next_attempt FROM ghraft_events WHERE event_id=?`, events[0].ID).Scan(&retryAt); e != nil || retryAt <= time.Now().Unix() {
+	if e = store.db.QueryRowContext(ctx, `SELECT next_attempt FROM ghraft_events WHERE event_id=?`, events[0].ID).Scan(&retryAt); e != nil || retryAt <= time.Now().Unix() {
 		t.Fatal("expected retry backoff before authorization", e)
 	}
 	if e = raft.AuthorizeEvents(ctx); e != nil {
 		t.Fatal(e)
 	}
-	if e = store.db.QueryRow(`SELECT next_attempt FROM ghraft_events WHERE event_id=?`, events[0].ID).Scan(&retryAt); e != nil || retryAt > time.Now().Unix() {
+	if e = store.db.QueryRowContext(ctx, `SELECT next_attempt FROM ghraft_events WHERE event_id=?`, events[0].ID).Scan(&retryAt); e != nil || retryAt > time.Now().Unix() {
 		t.Fatal("successful authorization did not unblock pending event", e)
 	}
-	// Token ciphertext must not contain the original; key mismatch cannot read it.
+	// Stored token ciphertext must not contain the plaintext credential.
 	var encrypted []byte
-	store.db.QueryRow(`SELECT ciphertext FROM ghraft_private WHERE secret_key=?`, raft.inboundKey()).Scan(&encrypted)
+	if e = store.db.QueryRowContext(ctx, `SELECT ciphertext FROM ghraft_private WHERE secret_key=?`, raft.inboundKey()).Scan(&encrypted); e != nil {
+		t.Fatal(e)
+	}
 	if bytes.Contains(encrypted, []byte("inbound-token")) {
 		t.Fatal("token stored plaintext")
 	}

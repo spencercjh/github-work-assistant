@@ -4,27 +4,26 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 )
 
 func TestPublicDiscoveryBoundary(t *testing.T) {
 	row := map[string]any{"subject": map[string]any{"type": "PullRequest", "url": "https://api.github.com/repos/Project-HAMi/HAMi/pulls/3259"}, "repository": map[string]any{"private": false}}
-	if w, ok := notificationWatch(row, Config{}); !ok || w.Key() != "project-hami/hami#3259" {
+	if w, ok := notificationWatch(row); !ok || w.Key() != "project-hami/hami#3259" {
 		t.Fatal("public notification lost")
 	}
 	row["repository"] = map[string]any{"private": true}
-	if _, ok := notificationWatch(row, Config{}); ok {
+	if _, ok := notificationWatch(row); ok {
 		t.Fatal("private discovery allowed")
 	}
 	row["repository"] = map[string]any{}
-	if _, ok := notificationWatch(row, Config{}); ok {
+	if _, ok := notificationWatch(row); ok {
 		t.Fatal("unknown visibility allowed")
 	}
 	row["repository"] = map[string]any{"private": false}
 	obj(row["subject"])["url"] = "https://evil.example/repos/Project-HAMi/HAMi/pulls/3259"
-	if _, ok := notificationWatch(row, Config{}); ok {
+	if _, ok := notificationWatch(row); ok {
 		t.Fatal("untrusted API URL")
 	}
 }
@@ -79,27 +78,14 @@ func TestDeltaBackfillAndEdits(t *testing.T) {
 	}
 }
 func TestLegacyImportAndTriagePersistence(t *testing.T) {
-	dsn := []byte(disposableTestDSN(t))
 	ctx := context.Background()
-	s, e := openTestStore(t, ctx, strings.TrimSpace(string(dsn)), bytes.Repeat([]byte{1}, 32))
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer s.db.Close()
-	if e = s.Migrate(ctx); e != nil {
-		t.Fatal(e)
-	}
-	for _, table := range []string{"ghraft_watch_access", "ghraft_work_links", "ghraft_triage", "ghraft_legacy_history", "ghraft_meta", "ghraft_watches", "ghraft_results", "ghraft_events", "ghraft_snapshots"} {
-		if _, e = s.db.Exec("DELETE FROM " + table); e != nil {
-			t.Fatal(e)
-		}
-	}
+	s := freshTestStore(t)
 	raw := []byte(`{"source":"github-assistant-pilot-v1","login":"tester","cursor":"2026-10-19T00:00:00Z","pending":0,"watches":[{"repo":"o/r","number":1,"private":false,"observed_at":1,"objects":{"issue":{"title":"old"},"review_comment:4314120299":{"body":"seen"}}}],"history":[{"marker":"old-marker","watch":"o/r#1","outcome":"notified","message":"real-legacy-ref"}]}`)
 	cfg := Config{GitHubLogin: "tester"}
-	if e = s.ImportLegacy(ctx, cfg, raw); e != nil {
+	if e := s.ImportLegacy(ctx, cfg, raw); e != nil {
 		t.Fatal(e)
 	}
-	if e = s.ImportLegacy(ctx, cfg, raw); e != nil {
+	if e := s.ImportLegacy(ctx, cfg, raw); e != nil {
 		t.Fatal("idempotent import", e)
 	}
 	hist, err := s.History(ctx, "o/r#1")
@@ -120,7 +106,7 @@ func TestLegacyImportAndTriagePersistence(t *testing.T) {
 	if e != nil || id == "" {
 		t.Fatal("post-import edit lost", e)
 	}
-	pending, e := s.Unprocessed(ctx)
+	pending, e := s.UnprocessedPage(ctx, 0)
 	if e != nil || len(pending) != 1 {
 		t.Fatal("processing queue wrong", e, pending)
 	}
@@ -135,12 +121,8 @@ func TestLegacyImportAndTriagePersistence(t *testing.T) {
 	if e = s.RecordTriage(ctx, triage); e == nil {
 		t.Fatal("overwrite accepted")
 	}
-	reopened, e := openTestStore(t, ctx, strings.TrimSpace(string(dsn)), bytes.Repeat([]byte{1}, 32))
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer reopened.db.Close()
-	pending, e = reopened.Unprocessed(ctx)
+	reopened := openTestStore(t)
+	pending, e = reopened.UnprocessedPage(ctx, 0)
 	if e != nil || len(pending) != 0 {
 		t.Fatal("processed notification replay after restart", e)
 	}

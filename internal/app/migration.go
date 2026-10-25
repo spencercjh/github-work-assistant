@@ -161,9 +161,6 @@ func (s *Store) RecordTriage(ctx context.Context, t Triage) error {
 	return tx.Commit()
 }
 
-func (s *Store) Unprocessed(ctx context.Context) ([]map[string]any, error) {
-	return s.UnprocessedPage(ctx, 0)
-}
 func (s *Store) UnprocessedPage(ctx context.Context, offset int) ([]map[string]any, error) {
 	rows, e := s.db.QueryContext(ctx, `SELECT e.event_id,e.resource_key,e.version_hash,e.state,e.payload FROM ghraft_events e LEFT JOIN ghraft_triage t ON t.event_id=e.event_id WHERE t.event_id IS NULL AND NOT EXISTS(SELECT 1 FROM ghraft_results r WHERE r.event_id=e.event_id) ORDER BY e.created_at,e.event_id LIMIT 100 OFFSET ?`, offset)
 	if e != nil {

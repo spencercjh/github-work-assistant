@@ -105,7 +105,7 @@ func run() error {
 		}
 		raft.Credential = string(b)
 	}
-	svc := &app.Service{Config: c, Store: store, Raft: raft, GH: app.GH{Login: c.GitHubLogin, Config: c}}
+	svc := &app.Service{Config: c, Store: store, Raft: raft, GH: app.GH{Login: c.GitHubLogin}}
 	switch command {
 	case "cleanup":
 		f := flag.NewFlagSet(command, flag.ContinueOnError)

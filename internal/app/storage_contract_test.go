@@ -6,6 +6,8 @@ import (
 	"errors"
 	"sync"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 // This exact suite runs against SQLite, PostgreSQL, MySQL and seekdb. Separate
@@ -13,11 +15,7 @@ import (
 func TestConcurrentFirstObservationAndImmutableTask(t *testing.T) {
 	s := freshTestStore(t)
 	ctx := context.Background()
-	other, err := openTestStore(t, ctx, disposableTestDSN(t), bytes.Repeat([]byte{1}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
+	other := openTestStore(t)
 	stores := []Persistence{s, other}
 	start := make(chan struct{})
 	type result struct {
@@ -84,24 +82,22 @@ func TestConcurrentFirstObservationAndImmutableTask(t *testing.T) {
 func TestFailedOutboxTransactionLeavesNoSnapshot(t *testing.T) {
 	s := freshTestStore(t)
 	ctx := context.Background()
-	tx, err := s.db.BeginWrite(ctx, "resource:example/rollback#1")
-	if err != nil {
+	failure := errors.New("outbox insert failed")
+	callbacks := s.db.Session(ctx).Callback().Create()
+	if err := callbacks.Before("gorm:create").Register("test:fail_outbox", func(tx *gorm.DB) {
+		if tx.Statement.Table == "ghraft_events" {
+			tx.AddError(failure)
+		}
+	}); err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, "INSERT INTO ghraft_snapshots(resource_key,version_hash,body,observed_at) VALUES(?,?,?,?)", "example/rollback#1", hash([]byte("snapshot")), "{}", 1)
-	if err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { callbacks.Remove("test:fail_outbox") })
+	// Fail the event insert in the actual observation path, after it saves the
+	// snapshot. The application must roll back instead of losing a notification.
+	if id, err := s.Observe(ctx, "example/rollback#1", []byte(`{"title":"new"}`)); !errors.Is(err, failure) || id != "" {
+		t.Fatal("failed outbox write was accepted", id, err)
 	}
-	// A real constraint violation AFTER the snapshot write must roll back both.
-	_, err = tx.ExecContext(ctx, "INSERT INTO ghraft_events(event_id,resource_key,version_hash,payload,state,created_at) VALUES(?,?,?,?,?,?)", hash([]byte("event")), "example/rollback#1", hash([]byte("snapshot")), nil, "pending", 1)
-	if err == nil {
-		t.Fatal("NOT NULL constraint was ignored")
-	}
-	if err = tx.Rollback(); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = s.Snapshot(ctx, "example/rollback#1"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.Snapshot(ctx, "example/rollback#1"); !errors.Is(err, ErrNotFound) {
 		t.Fatal("failed transaction retained snapshot", err)
 	}
 	events, err := s.Events(ctx, false)
@@ -116,7 +112,7 @@ func TestSchemaReadinessRequiresResourceLocks(t *testing.T) {
 	if err := s.SchemaReady(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec("DROP TABLE ghraft_locks"); err != nil {
+	if _, err := s.db.ExecContext(ctx, "DROP TABLE ghraft_locks"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SchemaReady(ctx); err == nil {

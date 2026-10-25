@@ -133,10 +133,6 @@ func (g GH) Collect(ctx context.Context, w Watch) ([]byte, error) {
 	if !known || !strings.EqualFold(str(meta["full_name"]), w.Repo) || priv {
 		return nil, ErrNotPublic
 	}
-	classification := "public"
-	if priv {
-		classification = "private"
-	}
 	prefix := "repos/" + w.Repo
 	ib := fmt.Sprintf("%s/issues/%d", prefix, w.Number)
 	issue, e := g.get(ctx, ib)
@@ -213,12 +209,12 @@ func (g GH) Collect(ctx context.Context, w Watch) ([]byte, error) {
 			return nil, errors.New("PR revisions changed during collection; retry required")
 		}
 	}
-	return canonical(Snapshot{w.Key(), classification, objects}), nil
+	return canonical(Snapshot{w.Key(), "public", objects}), nil
 }
 
 var notificationPath = regexp.MustCompile(`^/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pulls)/([0-9]+)$`)
 
-func notificationWatch(row map[string]any, c Config) (Watch, bool) {
+func notificationWatch(row map[string]any) (Watch, bool) {
 	subject := obj(row["subject"])
 	if subject["type"] != "Issue" && subject["type"] != "PullRequest" {
 		return Watch{}, false
@@ -252,7 +248,7 @@ func (g GH) Discover(ctx context.Context, since string) ([]Watch, string, error)
 		if t, e := time.Parse(time.RFC3339, str(row["updated_at"])); e == nil && t.After(latest) {
 			latest = t
 		}
-		w, ok := notificationWatch(row, g.Config)
+		w, ok := notificationWatch(row)
 		if ok && !seen[w.Key()] {
 			out = append(out, w)
 			seen[w.Key()] = true
