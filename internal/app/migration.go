@@ -17,7 +17,7 @@ type Change struct {
 	Kind   string `json:"kind"`
 }
 
-func changes(previous, current []byte, now time.Time, lookback int) ([]Change, bool) {
+func changes(previous, current []byte, now time.Time, lookback int, notBefore time.Time) ([]Change, bool) {
 	var old, new Snapshot
 	if json.Unmarshal(current, &new) != nil || new.Objects == nil {
 		return nil, false
@@ -49,9 +49,13 @@ func changes(previous, current []byte, now time.Time, lookback int) ([]Change, b
 					continue
 				}
 				recent := false
+				cutoff := now.Add(-time.Duration(lookback) * time.Hour)
+				if notBefore.After(cutoff) {
+					cutoff = notBefore
+				}
 				for _, f := range []string{"created_at", "updated_at", "submitted_at"} {
 					t, e := time.Parse(time.RFC3339, str(v[f]))
-					if e == nil && !t.Before(now.Add(-time.Duration(lookback)*time.Hour)) {
+					if e == nil && !t.Before(cutoff) {
 						recent = true
 					}
 				}

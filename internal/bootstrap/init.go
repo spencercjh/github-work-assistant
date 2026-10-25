@@ -29,20 +29,22 @@ const databaseImage = "mysql:8.4@sha256:76f0358884cb92d9a086d24e5671c38048d3fef4
 var handleRE = regexp.MustCompile(`^@?[A-Za-z0-9_.-]+(?:~(?:agent|human))?$`)
 
 type Options struct {
-	Database    string
-	DSN         []byte
-	SQLitePath  string
-	Dir         string
-	Executable  string
-	Token       []byte
-	Identity    app.ExternalIdentity
-	GitHubLogin string
-	Recipient   string
-	TaskChannel string
-	Notify      string
-	RaftAPI     string
-	Port        int
-	Watches     []app.Watch
+	Database                  string
+	DSN                       []byte
+	SQLitePath                string
+	Dir                       string
+	Executable                string
+	Token                     []byte
+	Identity                  app.ExternalIdentity
+	GitHubLogin               string
+	Recipient                 string
+	TaskChannel               string
+	Notify                    string
+	RaftAPI                   string
+	Port                      int
+	Watches                   []app.Watch
+	PrivateRepositories       []string
+	PrivateNotificationsSince string
 }
 
 func Init(args []string, out io.Writer) error {
@@ -59,6 +61,8 @@ func Init(args []string, out io.Writer) error {
 	sqlitePath := f.String("sqlite-path", "", "Local SQLite file; defaults to the private instance directory")
 	port := f.Int("db-port", 13306, "Unused loopback port for a managed MySQL container")
 	watches := f.String("watch", "", "Optional comma-separated owner/repo#number watches")
+	privateRepos := f.String("private-repositories", "", "Private repository scope: comma-separated owner/repo, owner/* or *; empty disables private access")
+	privateSince := f.String("private-notifications-since", "", "Earliest private notification and first-observation comment time (RFC3339); defaults to now when enabling private repositories")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -141,7 +145,13 @@ func Init(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	o := Options{Database: *backend, DSN: dsn, SQLitePath: *sqlitePath, Dir: *dir, Executable: executable, Token: token, Identity: identity, GitHubLogin: login, Recipient: *recipient, TaskChannel: *taskChannel, Notify: *notify, RaftAPI: r.Config.RaftAPI, Port: *port, Watches: parsed}
+	var privateScope []string
+	if *privateRepos != "" {
+		for _, pattern := range strings.Split(*privateRepos, ",") {
+			privateScope = append(privateScope, strings.TrimSpace(pattern))
+		}
+	}
+	o := Options{Database: *backend, DSN: dsn, SQLitePath: *sqlitePath, Dir: *dir, Executable: executable, Token: token, Identity: identity, GitHubLogin: login, Recipient: *recipient, TaskChannel: *taskChannel, Notify: *notify, RaftAPI: r.Config.RaftAPI, Port: *port, Watches: parsed, PrivateRepositories: privateScope, PrivateNotificationsSince: *privateSince}
 	if err := Write(o); err != nil {
 		return err
 	}
@@ -244,6 +254,11 @@ func Write(o Options) error {
 	c := app.Config{DatabaseDriver: o.Database, RaftMode: "external", ExternalAgent: o.Identity.Agent.ID, ServerID: o.Identity.Server.ID, ServerSlug: o.Identity.Server.Slug, RaftAPI: o.RaftAPI, GitHubLogin: o.GitHubLogin, DeliveryTarget: "dm:@" + recipient + "~agent", PollSeconds: 120, Discover: true, Watches: o.Watches, NotifyTarget: notify, LookbackHours: 6, HistoryRetentionDays: 30, WorkspaceRoot: filepath.Join(root, "worktrees")}
 	if o.TaskChannel != "" {
 		c.DeliveryTarget = o.TaskChannel
+	}
+	c.PrivateRepositories = o.PrivateRepositories
+	c.PrivateNotificationsSince = o.PrivateNotificationsSince
+	if len(c.PrivateRepositories) > 0 && c.PrivateNotificationsSince == "" {
+		c.PrivateNotificationsSince = time.Now().UTC().Format(time.RFC3339)
 	}
 	config, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -364,7 +379,7 @@ record-triage、link-task、record-work-result、prepare-worktree、verify-workt
 	}
 	return fmt.Sprintf(`# GitHub 助手工作说明
 
-这份安装的采集程序向你发送 GitHub 变化通知；程序只采集公开事项，不调用模型、不执行仓库代码。请在同一台机器、同一个操作系统账号下读取下面的本地 CLI。人在与你的对话中提出需求；不要向采集程序询问问题，它不处理聊天。
+这份安装的采集程序向你发送 GitHub 变化通知；程序采集公开事项，以及配置明确允许且当前 GitHub 账号可读的私有事项，不调用模型、不执行仓库代码。请在同一台机器、同一个操作系统账号下读取下面的本地 CLI。人在与你的对话中提出需求；不要向采集程序询问问题，它不处理聊天。
 
 %s
 收到事件 ID 并取得工作归属后，运行：
@@ -376,5 +391,7 @@ record-triage、link-task、record-work-result、prepare-worktree、verify-workt
 上下文中的仓库指引决定本地操作范围。未配置仓库指引时默认只读；需要工程执行时由部署者在 config.json 的 repositories 中配置可信本地指引。已有工作应续接原记录，完成后使用 record-work-result 保存报告及证据版本。简单通知判断用 record-triage 记录 quiet 或 notified；后者须先真正发送通知，再保存消息 UUID 和配置的目标。pending 可列出尚未判断的事件。完整命令见仓库 docs/AGENT-WORKFLOW.md；不要把投递成功当作处理完成。
 
 需要提醒的用户：%s。只有值得用户关注的变化才汇报，并附来源。不要将本目录 private/ 中的文件内容写进消息、报告或日志。
+
+私有事件标记为 data_classification=private。首次观察中的 baseline 是背景，不代表新消息；private_notifications_since 之前的历史评论不单独补报。私有正文和代码仅用于已委托的调查；人类提醒发送到配置的 notify_target，共享任务回复只说明处理状态，不转贴私有正文、代码或引用到其他目的地。访问范围移除或 GitHub 权限失效时，停止读取旧上下文和执行，不绕过程序限制。
 `, competition, shellQuote(filepath.Join(root, "run")), notify)
 }

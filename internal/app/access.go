@@ -23,6 +23,11 @@ func (s *Service) reconcileWatches(ctx context.Context) error {
 
 func (s *Service) watchConfigured(ctx context.Context, key string) bool {
 	key = strings.ToLower(key)
+	private, err := s.Store.Meta(ctx, "private-watch:"+key, "false")
+	repo, _, _ := strings.Cut(key, "#")
+	if err != nil || (private == "true" && !privateRepositoryAllowed(s.Config.PrivateRepositories, repo)) {
+		return false
+	}
 	if _, ok := s.Config.Watch(key); ok {
 		return true
 	}
@@ -38,12 +43,36 @@ func (s *Service) allowed(ctx context.Context, key string) bool {
 		return false
 	}
 	blocked, err := s.Store.WatchBlocked(ctx, strings.ToLower(key))
-	return errors.Is(err, ErrNotFound) || (err == nil && !blocked)
+	if !errors.Is(err, ErrNotFound) && (err != nil || blocked) {
+		return false
+	}
+	private, err := s.Store.Meta(ctx, "private-watch:"+strings.ToLower(key), "false")
+	if err != nil {
+		return false
+	}
+	if private == "true" {
+		repo, _, _ := strings.Cut(key, "#")
+		if !privateRepositoryAllowed(s.Config.PrivateRepositories, repo) {
+			return false
+		}
+		// Private cached context requires current GitHub access as well as the
+		// configured scope, including on standalone CLI reads and delivery retries.
+		g, ok := s.GH.(interface {
+			RepositoryClassification(context.Context, string) (string, error)
+		})
+		if !ok || s.GH.CheckIdentity(ctx) != nil {
+			return false
+		}
+		if _, err := g.RepositoryClassification(ctx, repo); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) collectWatch(ctx context.Context, w Watch) error {
 	b, err := s.GH.Collect(ctx, w)
-	if errors.Is(err, ErrNotPublic) {
+	if errors.Is(err, ErrRepositoryNotAllowed) || errors.Is(err, ErrGitHubAccessDenied) {
 		dbErr := s.Store.SetBlocked(ctx, w.Key(), true)
 		return errors.Join(err, dbErr)
 	}
@@ -68,6 +97,28 @@ func (s *Service) Pending(ctx context.Context) ([]map[string]any, error) {
 		for _, item := range page {
 			if s.allowed(ctx, str(item["resource_key"])) {
 				out = append(out, item)
+				if len(out) == 100 {
+					break
+				}
+			}
+		}
+		if len(page) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) Events(ctx context.Context) ([]Event, error) {
+	out := []Event{}
+	for offset := 0; len(out) < 100; offset += 100 {
+		page, err := s.Store.EventsPage(ctx, false, offset)
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range page {
+			if s.allowed(ctx, event.Key) {
+				out = append(out, event)
 				if len(out) == 100 {
 					break
 				}

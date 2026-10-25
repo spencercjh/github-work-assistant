@@ -24,6 +24,8 @@ if a[6:] not in ([],['--paginate','--slurp']):
 with open(os.environ['GHRAFT_FIXTURE']) as f: data=json.load(f)
 p=a[5]
 if p not in data: sys.exit('unconfigured fixture endpoint')
+if isinstance(data[p],dict) and '_http_status' in data[p]:
+    sys.exit('gh: simulated access failure (HTTP %d)' % data[p]['_http_status'])
 print(json.dumps(data[p]))
 `
 	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
@@ -107,7 +109,7 @@ func TestCollectorRecordsExactRevisionsAndUnknown(t *testing.T) {
 	data := readFixture(t, path)
 	obj(data["repos/example/fixture"])["private"] = true
 	writeFixture(t, path, data)
-	if _, err := g.Collect(context.Background(), Watch{"example/fixture", 1}); err != ErrNotPublic {
+	if _, err := g.Collect(context.Background(), Watch{"example/fixture", 1}); err != ErrRepositoryNotAllowed {
 		t.Fatal("private data collection not denied", err)
 	}
 }

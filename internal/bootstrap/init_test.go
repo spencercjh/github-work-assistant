@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github-raft-app/internal/app"
 )
@@ -105,12 +106,19 @@ func TestInvalidSetupLeavesNoPartialInstance(t *testing.T) {
 func TestSharedChannelSetupAndClaimInstructions(t *testing.T) {
 	o := fixtureOptions(t)
 	o.Recipient, o.TaskChannel = "", "#开发工作"
+	o.PrivateRepositories = []string{"example/*"}
 	if err := Write(o); err != nil {
 		t.Fatal(err)
 	}
 	c, err := app.LoadConfig(filepath.Join(o.Dir, "config.json"))
 	if err != nil || !c.SharedTasks() || c.DeliveryTarget != o.TaskChannel {
 		t.Fatal("shared channel not configured", err)
+	}
+	if len(c.PrivateRepositories) != 1 || c.PrivateRepositories[0] != "example/*" {
+		t.Fatal("private scope not persisted")
+	}
+	if since, err := time.Parse(time.RFC3339, c.PrivateNotificationsSince); err != nil || time.Since(since) > time.Minute {
+		t.Fatal("new private scope must start from installation time", err)
 	}
 	guide, err := os.ReadFile(filepath.Join(o.Dir, "EXECUTOR.md"))
 	if err != nil {

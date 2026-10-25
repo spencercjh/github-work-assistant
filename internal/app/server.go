@@ -210,7 +210,7 @@ func (s *Service) Handler() http.Handler {
 			fail(w, 401, "AUTHENTICATION_REQUIRED")
 			return
 		}
-		ok(w, map[string]any{"principal": u, "github_login": s.Config.GitHubLogin, "watches": s.Config.Watches, "github_access": "read-only; public watches and discovery only", "task_authority": "Raft"})
+		ok(w, map[string]any{"principal": u, "github_login": s.Config.GitHubLogin, "watches": s.Config.Watches, "github_access": "read-only; public repositories and configured private scope", "private_repositories": s.Config.PrivateRepositories, "task_authority": "Raft"})
 	})
 	m.HandleFunc("POST /api/actions/list-events", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct{}

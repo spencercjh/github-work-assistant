@@ -86,6 +86,7 @@ func run() error {
 	}
 	defer store.Close()
 	store.LookbackHours = c.LookbackHours
+	store.PrivateSince, _ = time.Parse(time.RFC3339, c.PrivateNotificationsSince)
 	if command == "migrate" {
 		return store.Migrate(dbctx)
 	}
@@ -106,7 +107,7 @@ func run() error {
 		}
 		raft.Credential = string(b)
 	}
-	svc := &app.Service{Config: c, Store: store, Raft: raft, GH: app.GH{Login: c.GitHubLogin}}
+	svc := &app.Service{Config: c, Store: store, Raft: raft, GH: app.GH{Login: c.GitHubLogin, PrivateRepositories: c.PrivateRepositories, PrivateNotificationsSince: c.PrivateNotificationsSince}}
 	switch command {
 	case "cleanup":
 		f := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -187,7 +188,7 @@ func run() error {
 	case "deliver":
 		return svc.Deliver(dbctx)
 	case "events":
-		events, e := store.Events(dbctx, false)
+		events, e := svc.Events(dbctx)
 		if e != nil {
 			return e
 		}

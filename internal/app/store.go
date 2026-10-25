@@ -20,6 +20,7 @@ type Store struct {
 	db            *database.DB
 	Box           cipher.AEAD
 	LookbackHours int
+	PrivateSince  time.Time
 }
 
 // OpenStoreBackend is the SQL implementation's composition point. New backends
@@ -96,6 +97,25 @@ func (s *Store) Observe(ctx context.Context, key string, body []byte) (string, e
 		return "", e
 	}
 	defer tx.Rollback()
+	var current Snapshot
+	_ = json.Unmarshal(body, &current)
+	// Keep the restriction after a repository becomes public: historical events
+	// can still contain private content. No schema or historical payload rewrite.
+	if current.Classification == "private" {
+		if e = tx.Upsert(ctx, &metaRecord{"private-watch:" + key, "true"}, []string{"name"}, nil); e != nil {
+			return "", e
+		}
+	}
+	classification := current.Classification
+	var protected string
+	e = tx.QueryRowContext(ctx, `SELECT value FROM ghraft_meta WHERE name=?`, "private-watch:"+key).Scan(&protected)
+	if e != nil && !errors.Is(e, ErrNotFound) {
+		return "", e
+	}
+	if protected == "true" {
+		// A change's previous value may still be private after visibility changes.
+		classification = "private"
+	}
 	var previous, previousBody string
 	e = tx.QueryRowContext(ctx, `SELECT version_hash,body FROM ghraft_snapshots WHERE resource_key=?`, key).Scan(&previous, &previousBody)
 	if e != nil && !errors.Is(e, ErrNotFound) {
@@ -112,10 +132,12 @@ func (s *Store) Observe(ctx context.Context, key string, body []byte) (string, e
 		return "", e
 	}
 	id := hash(append([]byte(key+v), nonce...))
-	delta, structured := changes([]byte(previousBody), body, time.Now(), s.LookbackHours)
-	var current Snapshot
-	_ = json.Unmarshal(body, &current)
-	payload, _ := json.Marshal(map[string]any{"event_id": id, "resource_key": key, "version": v, "previous_version": previous, "first_observation": previous == "", "data_classification": current.Classification, "changes": delta})
+	var since time.Time
+	if classification == "private" {
+		since = s.PrivateSince
+	}
+	delta, structured := changes([]byte(previousBody), body, time.Now(), s.LookbackHours, since)
+	payload, _ := json.Marshal(map[string]any{"event_id": id, "resource_key": key, "version": v, "previous_version": previous, "first_observation": previous == "", "data_classification": classification, "changes": delta})
 	e = tx.Upsert(ctx, &snapshotRecord{key, v, string(body), time.Now().Unix()}, []string{"resource_key"}, []string{"version_hash", "body", "observed_at"})
 	if e != nil {
 		return "", e

@@ -69,7 +69,7 @@ state/my-assistant/run doctor
 
 单人 DM 投递仍可用 `--recipient @reviewer` 安装，与 `--task-channel` 二选一。它不创建共享任务，也不提供竞争认领。
 
-初始安装通过 GitHub Notifications 自动发现公开 Issue／PR。首次发现的事项保留最近 6 小时内的变化供判断，后续沿持久化游标继续；它不是 GitHub 全量历史归档。可在 `config.json` 增加固定关注对象：
+初始安装默认通过 GitHub Notifications 自动发现公开 Issue／PR。私有仓库需配置 `private_repositories`，支持组织、仓库或全部可读范围，见[私有仓库配置](PRIVATE-REPOSITORIES.md)。首次发现的事项保留最近 6 小时内的变化供判断；私有范围可另设固定起点，后续沿持久化游标继续。它不是 GitHub 全量历史归档。可在 `config.json` 增加固定关注对象：
 
 ```json
 "watches": [{"repo": "your-name/your-repo", "number": 123}]

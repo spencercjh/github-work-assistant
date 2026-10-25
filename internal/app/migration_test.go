@@ -10,20 +10,20 @@ import (
 
 func TestPublicDiscoveryBoundary(t *testing.T) {
 	row := map[string]any{"subject": map[string]any{"type": "PullRequest", "url": "https://api.github.com/repos/Project-HAMi/HAMi/pulls/3259"}, "repository": map[string]any{"private": false}}
-	if w, ok := notificationWatch(row); !ok || w.Key() != "project-hami/hami#3259" {
+	if w, ok := (GH{}).notificationWatch(row); !ok || w.Key() != "project-hami/hami#3259" {
 		t.Fatal("public notification lost")
 	}
 	row["repository"] = map[string]any{"private": true}
-	if _, ok := notificationWatch(row); ok {
+	if _, ok := (GH{}).notificationWatch(row); ok {
 		t.Fatal("private discovery allowed")
 	}
 	row["repository"] = map[string]any{}
-	if _, ok := notificationWatch(row); ok {
+	if _, ok := (GH{}).notificationWatch(row); ok {
 		t.Fatal("unknown visibility allowed")
 	}
 	row["repository"] = map[string]any{"private": false}
 	obj(row["subject"])["url"] = "https://evil.example/repos/Project-HAMi/HAMi/pulls/3259"
-	if _, ok := notificationWatch(row); ok {
+	if _, ok := (GH{}).notificationWatch(row); ok {
 		t.Fatal("untrusted API URL")
 	}
 }
@@ -58,21 +58,21 @@ func TestDeltaBackfillAndEdits(t *testing.T) {
 	now := time.Now().UTC()
 	s := Snapshot{Key: "o/r#1", Classification: "public", Objects: Objects{"issue": {"title": "a"}, "review_comment:1": {"body": "old", "created_at": now.Add(-time.Hour).Format(time.RFC3339)}, "comment:2": {"body": "older", "created_at": now.Add(-24 * time.Hour).Format(time.RFC3339)}}}
 	b := canonical(s)
-	d, ok := changes(nil, b, now, 6)
+	d, ok := changes(nil, b, now, 6, time.Time{})
 	if !ok || len(d) != 2 {
 		t.Fatal("first observation did not catch recent comment", d)
 	}
-	if d, _ := changes(b, b, now, 6); len(d) != 0 {
+	if d, _ := changes(b, b, now, 6, time.Time{}); len(d) != 0 {
 		t.Fatal("same baseline replayed")
 	}
 	s.Objects["review_comment:1"]["body"] = "edited"
-	d, _ = changes(b, canonical(s), now, 6)
+	d, _ = changes(b, canonical(s), now, 6, time.Time{})
 	if len(d) != 1 || d[0].Kind != "changed" || obj(d[0].Before)["body"] != "old" {
 		t.Fatal("edit evidence lost", d)
 	}
 	delete(s.Objects, "review_comment:1")
 	delete(s.Objects, "comment:2")
-	d, _ = changes(b, canonical(s), now, 6)
+	d, _ = changes(b, canonical(s), now, 6, time.Time{})
 	if len(d) != 2 || d[0].Kind != "not_observed" || d[1].Kind != "not_observed" {
 		t.Fatal("missing objects must produce qualified observations, not asserted deletion", d)
 	}

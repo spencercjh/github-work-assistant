@@ -17,6 +17,8 @@
     }
   ],
   "discover_notifications": true,
+  "private_repositories": [],
+  "private_notifications_since": "",
   "notify_target": "dm:@your-human",
   "lookback_hours": 6,
   "workspace_root": "state/worktrees",

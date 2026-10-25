@@ -102,7 +102,8 @@ func normalizeRow(kind string, row map[string]any) (string, map[string]any, bool
 		source := obj(row["source"])
 		issue := obj(source["issue"])
 		repo := obj(issue["repository"])
-		// Public context can contain private cross-references. Unknown visibility is excluded too.
+		// Keep cross-repository private references out of stored context, even when
+		// the parent is private: source permissions may change independently.
 		if p, ok := repo["private"].(bool); !ok || p {
 			return "", nil, false
 		}
@@ -125,13 +126,9 @@ func normalizeRow(kind string, row map[string]any) (string, map[string]any, bool
 	return kind + ":" + id, n, true
 }
 func (g GH) Collect(ctx context.Context, w Watch) ([]byte, error) {
-	meta, e := g.get(ctx, "repos/"+w.Repo)
+	classification, e := g.RepositoryClassification(ctx, w.Repo)
 	if e != nil {
 		return nil, e
-	}
-	priv, known := meta["private"].(bool)
-	if !known || !strings.EqualFold(str(meta["full_name"]), w.Repo) || priv {
-		return nil, ErrNotPublic
 	}
 	prefix := "repos/" + w.Repo
 	ib := fmt.Sprintf("%s/issues/%d", prefix, w.Number)
@@ -209,12 +206,12 @@ func (g GH) Collect(ctx context.Context, w Watch) ([]byte, error) {
 			return nil, errors.New("PR revisions changed during collection; retry required")
 		}
 	}
-	return canonical(Snapshot{w.Key(), "public", objects}), nil
+	return canonical(Snapshot{w.Key(), classification, objects}), nil
 }
 
 var notificationPath = regexp.MustCompile(`^/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pulls)/([0-9]+)$`)
 
-func notificationWatch(row map[string]any) (Watch, bool) {
+func (g GH) notificationWatch(row map[string]any) (Watch, bool) {
 	subject := obj(row["subject"])
 	if subject["type"] != "Issue" && subject["type"] != "PullRequest" {
 		return Watch{}, false
@@ -230,8 +227,18 @@ func notificationWatch(row map[string]any) (Watch, bool) {
 	n, _ := strconv.Atoi(m[2])
 	w := Watch{m[1], n}
 	private, ok := obj(row["repository"])["private"].(bool)
-	if !ok || n < 1 || private {
+	if !ok || n < 1 || (private && !privateRepositoryAllowed(g.PrivateRepositories, w.Repo)) {
 		return Watch{}, false
+	}
+	if name := str(obj(row["repository"])["full_name"]); name != "" && !strings.EqualFold(name, w.Repo) {
+		return Watch{}, false
+	}
+	if private && g.PrivateNotificationsSince != "" {
+		since, err := time.Parse(time.RFC3339, g.PrivateNotificationsSince)
+		updated, updatedErr := time.Parse(time.RFC3339, str(row["updated_at"]))
+		if err != nil || updatedErr != nil || updated.Before(since) {
+			return Watch{}, false
+		}
 	}
 	return w, true
 }
@@ -248,7 +255,7 @@ func (g GH) Discover(ctx context.Context, since string) ([]Watch, string, error)
 		if t, e := time.Parse(time.RFC3339, str(row["updated_at"])); e == nil && t.After(latest) {
 			latest = t
 		}
-		w, ok := notificationWatch(row)
+		w, ok := g.notificationWatch(row)
 		if ok && !seen[w.Key()] {
 			out = append(out, w)
 			seen[w.Key()] = true
