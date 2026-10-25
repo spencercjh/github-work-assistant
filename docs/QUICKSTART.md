@@ -6,7 +6,7 @@
 
 - 在电脑上安装并运行 Raft，准备一个可用的执行 Agent，例如 `@reviewer`。确认该 Agent 能运行本机命令；它需要读取本次安装目录。
 - 在同一个 Raft Server 的 **External Agents** 页面创建另一个身份，用于运行采集程序，并取得其登录 token。它需要 `read` 和 `send` 能力。不要使用执行 Agent 的管理凭据。页面入口与登录方式见 [Raft 官方说明](https://docs.raft.build/developers/sdk/external-agents/)。
-- 安装 [Go 1.26 或更新版本](https://go.dev/doc/install)和 [GitHub CLI](https://cli.github.com/)。默认使用本地 SQLite，无需数据库服务或 C 编译器。只有选择新建 MySQL 容器时，才需要 [Docker Engine](https://docs.docker.com/engine/install/) 和 [Compose 插件](https://docs.docker.com/compose/install/linux/)，并检查服务账号能运行 `docker info` 和 `docker compose version`。
+- 安装 [Go 1.27.3 或更新版本](https://go.dev/doc/install)和 [GitHub CLI](https://cli.github.com/)。默认使用本地 SQLite，无需数据库服务或 C 编译器。只有选择新建 MySQL 容器时，才需要 [Docker Engine](https://docs.docker.com/engine/install/) 和 [Compose 插件](https://docs.docker.com/compose/install/linux/)，并检查服务账号能运行 `docker info` 和 `docker compose version`。
 - 以服务账号运行 `gh auth login --hostname github.com`。Notifications 读取需要对应权限；使用个人访问令牌时须支持 Notifications API，并有目标资源读取权限。程序不提取或复制 `gh` 的凭据。
 
 无需新增模型 API key、Raft App 注册、回调地址或公网入站端口。External Agent 在这里是发送通知的程序身份，不运行模型，也不处理发给它的聊天。请继续与执行 Agent 对话。

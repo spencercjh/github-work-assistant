@@ -21,7 +21,7 @@ Go 服务采集显式关注及从 GitHub Notifications 发现的公开 Issue／P
 
 ## 运行
 
-需要 Go 1.26+、`gh`、专用数据库及当前 Raft App 接入。数据库通过 `database_driver` 选择 SQLite、MySQL／seekdb／TiDB 或 PostgreSQL，连接方式见 [STORAGE.md](STORAGE.md)。省略该配置的既有安装继续使用 MySQL 驱动。使用专用数据库和账号；DSN 不应指向其他项目数据库。
+需要 Go 1.27.3+、`gh`、专用数据库及当前 Raft App 接入。数据库通过 `database_driver` 选择 SQLite、MySQL／seekdb／TiDB 或 PostgreSQL，连接方式见 [STORAGE.md](STORAGE.md)。省略该配置的既有安装继续使用 MySQL 驱动。使用专用数据库和账号；DSN 不应指向其他项目数据库。
 
 ```bash
 make build
