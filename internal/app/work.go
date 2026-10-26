@@ -17,6 +17,8 @@ type TaskLink struct {
 	GuideVersion    string `json:"guide_version"`
 }
 type WorkContext struct {
+	CurrentEventID string            `json:"current_event_id"`
+	Fork           *ForkProgress     `json:"fork,omitempty"`
 	Event          Event             `json:"event"`
 	Snapshot       json.RawMessage   `json:"snapshot"`
 	CurrentVersion string            `json:"current_version"`
@@ -72,11 +74,18 @@ func (s *Service) WorkContext(ctx context.Context, id string) (WorkContext, erro
 	if !s.allowed(ctx, w.Event.Key) {
 		return WorkContext{}, ErrWorkDenied
 	}
-	watch, err := resourceWatch(w.Event.Key)
+	definition, err := s.Config.WorkDefinition(w.Event.Key)
 	if err != nil {
 		return w, err
 	}
-	w.Guide, err = s.Config.RepositoryGuide(watch.Repo)
+	w.Guide, err = definition.Guide(s.Config)
+	if definition.Fork != nil && err == nil {
+		progress, e := s.Store.ForkProgress(ctx, w.Event.Key)
+		if e != nil {
+			return w, e
+		}
+		w.Fork = &progress
+	}
 	if err != nil {
 		return w, err
 	}
@@ -100,7 +109,7 @@ func (s *Service) RefreshWorkContext(ctx context.Context, id string) (WorkContex
 	if err != nil {
 		return w, err
 	}
-	watch, err := resourceWatch(w.Event.Key)
+	definition, err := s.Config.WorkDefinition(w.Event.Key)
 	if err != nil {
 		return w, err
 	}
@@ -109,9 +118,11 @@ func (s *Service) RefreshWorkContext(ctx context.Context, id string) (WorkContex
 	if err = s.GH.CheckIdentity(ctx); err != nil {
 		return w, err
 	}
-	err = s.collectWatch(ctx, watch)
-	if statusErr := s.Store.CollectionStatus(ctx, watch.Key(), err); statusErr != nil {
-		return w, statusErr
+	err = definition.Collect(ctx, s)
+	if definition.Fork == nil {
+		if statusErr := s.Store.CollectionStatus(ctx, definition.Key, err); statusErr != nil {
+			return w, statusErr
+		}
 	}
 	if err != nil {
 		return w, err
@@ -168,6 +179,18 @@ func (s *Service) RecordWorkResult(ctx context.Context, in WorkResult) error {
 	}
 	if in.Outcome == "changes-ready" && w.Guide.Mode != "local-edit" {
 		return ErrWorkDenied
+	}
+	if w.Fork != nil {
+		if in.Outcome == "merged" {
+			if _, err := s.RefreshWorkContext(ctx, in.EventID); err != nil {
+				return err
+			}
+			w, err = s.CheckWork(ctx, in.WorkInput)
+			if err != nil {
+				return err
+			}
+		}
+		return s.recordForkResult(ctx, w, in)
 	}
 	if in.Outcome == "merged" {
 		var snapshot Snapshot
