@@ -123,7 +123,7 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 			if p.PR != 0 && p.PR != o.PR {
 				return o, errors.New("sync PR identity changed")
 			}
-			body, err := g.Collect(ctx, Watch{f.Target.Repo, o.PR})
+			body, err := g.collect(ctx, Watch{f.Target.Repo, o.PR}, true)
 			if err != nil {
 				return o, err
 			}

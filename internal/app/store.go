@@ -130,7 +130,20 @@ func (s *Store) observeTx(ctx context.Context, tx *database.Tx, key string, body
 	if e != nil && !errors.Is(e, ErrNotFound) {
 		return "", e
 	}
-	if previous == v {
+	// An earlier collector exposed fork-only merge evidence on ordinary PRs.
+	// Removing that field must not notify again or invalidate existing work.
+	// Keep the original snapshot/version intact until a real change occurs.
+	comparisonBody := []byte(previousBody)
+	if current.Objects["fork"] == nil && current.Objects["pull"] != nil {
+		var old Snapshot
+		if json.Unmarshal(comparisonBody, &old) == nil && old.Objects["fork"] == nil {
+			if _, present := old.Objects["pull"]["merge_commit_sha"]; present {
+				delete(old.Objects["pull"], "merge_commit_sha")
+				comparisonBody = canonical(old)
+			}
+		}
+	}
+	if previous == v || (previous != "" && hash(comparisonBody) == v) {
 		if e = tx.Session(ctx).Model(&snapshotRecord{}).Where("resource_key = ?", key).UpdateColumn("observed_at", time.Now().Unix()).Error; e != nil {
 			return "", e
 		}
@@ -145,7 +158,7 @@ func (s *Store) observeTx(ctx context.Context, tx *database.Tx, key string, body
 	if classification == "private" {
 		since = s.PrivateSince
 	}
-	delta, structured := changes([]byte(previousBody), body, time.Now(), s.LookbackHours, since)
+	delta, structured := changes(comparisonBody, body, time.Now(), s.LookbackHours, since)
 	payload, _ := json.Marshal(map[string]any{"event_id": id, "resource_key": key, "version": v, "previous_version": previous, "first_observation": previous == "", "data_classification": classification, "subject": subjectOf(current), "changes": delta})
 	e = tx.Upsert(ctx, &snapshotRecord{key, v, string(body), time.Now().Unix()}, []string{"resource_key"}, []string{"version_hash", "body", "observed_at"})
 	if e != nil {
