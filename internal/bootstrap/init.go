@@ -360,21 +360,21 @@ func executorGuide(root, notify, channel string) string {
 		competition = fmt.Sprintf(`
 ## 先认领共享任务
 
-任务发布到 %s，执行者由频道成员管理。先用 raft task list --target <工作频道> 读取任务的 Current description，取得事件 ID 与操作约定；仅阅读通知标题可能看不到描述。使用你自己的 Raft 身份读取任务，再运行：
+每个 PR/Issue 在 %s 只保留一个固定任务和讨论区，执行者由频道成员管理。首次创建时，执行者由频道成员竞争认领；认领后持续负责，任务完成不解除归属。后续事件追加到原讨论区并提醒原负责人，不创建新任务。先读取原任务的当前归属和完整讨论；根描述只包含首次事件，后续事件 ID 以新增消息为准。原任务为 todo 且未分配，或 todo 且已指派给自己时，使用你自己的 Raft 身份运行以下命令；已指派给别人时不得竞争：
 
     raft task claim --target %s --number <本任务编号>
 
-认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。恢复自己的工作时先读取当前任务，确认仍由自己负责且为 in_progress。
+认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。原任务为 done 或 in_review 且出现未处理的新事件时，由原负责人先读取新消息，再将同一任务恢复为 in_progress；不要因已结束就丢弃新事件。closed 表示用户停止这项工作，必须等用户明确恢复。任务归人类或负责人不在频道时，等待人工交接，不代为认领。
 
 认领后以 raft auth whoami 确认自己的稳定名称，并运行：
 
     %s verify-claim --event <事件ID> --executor @你的名称
 
-只有 execute=true 才执行。execute=false 表示已由别人负责或已结束，静默退出；投递回执尚未落库时等待本次投递确认，不另建任务。程序连接失败时不执行。该检查使用实时任务归属；--executor 不能填写别人的名称。所有 Agent 共享本机账号，这个参数用于检查协作流程，不提供系统用户隔离。
+只有 execute=true 才执行。execute=false 表示当前没有执行权限；先按上述规则处理归自己的 todo、done 或 in_review，再核验，仍不可执行时静默退出。投递回执尚未落库时等待本次投递确认，不另建任务。程序连接失败时不执行。该检查使用实时任务归属；--executor 不能填写别人的名称。所有 Agent 共享本机账号，这个参数用于检查协作流程，不提供系统用户隔离。
 
-record-triage、link-task、record-work-result、prepare-worktree、verify-worktree 都要带同一个 --executor；写入前会再次核对任务归属。向用户发送消息或修改仓库前也要重新 verify-claim。已经处理的事件不重复执行。同一 PR 的新事件会有新的判断任务，但已有工程任务继续由其负责人处理；读取 work-context.task，未取得原工程任务归属时只交接，不并行修改。
+record-triage、link-task、record-work-result、prepare-worktree、verify-worktree 都要带同一个 --executor；写入前会再次核对任务归属。向用户发送消息或修改仓库前也要重新 verify-claim。已经处理的事件不重复执行。work-context.discussion 是固定通知任务，work-context.task 是可选的工程任务。已有工程任务继续由其负责人处理；未取得原工程任务归属时只交接，不并行修改。旧事件的通知回执可能指向历史任务，执行归属以 discussion 和原任务当前状态为准。
 
-完成判断后先保存本机结果，再把共享任务更新为 in_review，按用户确认结束。中断不会自动释放任务；只有明确交接后才由原负责人或有权限的用户解除归属。不要设置自动抢占或定时重抢。
+结束前读取原讨论区及 pending 中属于本事项的未处理事件，逐项保存判断；再把原任务更新为 in_review，按用户确认结束。负责人持续保留，后续变化仍在同一讨论区处理。只有用户明确要求才交接：先让原负责人停止，再由有权限的用户在原任务上 assign 给接手者。程序不会自动 unclaim、改派或重开 closed 任务；执行者也不得因完成、离线或超时自行交接。升级时需要 adopt-discussion 选择历史任务的操作由部署者明确决定，执行者不能自行选择。
 `, channel, shellQuote(channel), shellQuote(filepath.Join(root, "run")))
 	}
 	return fmt.Sprintf(`# GitHub 助手工作说明

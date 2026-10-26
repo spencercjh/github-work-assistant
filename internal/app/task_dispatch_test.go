@@ -22,6 +22,9 @@ type taskAPI struct {
 	writes, creates                                   int
 	owner, status, engineeringOwner                   string
 	lostReply, forbidden, missingMember, missingTasks bool
+	updates                                           map[string]string
+	updateWrites                                      int
+	lostUpdate, missingRoot, anchored                 bool
 }
 
 func (f *taskAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -63,10 +66,34 @@ func (f *taskAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(502)
 			return
 		}
-		encode(map[string]any{"tasks": []map[string]any{{"taskNumber": 17, "messageId": fixtureTask, "status": "todo", "claimedById": nil}}})
+		encode(map[string]any{"tasks": []map[string]any{{"taskNumber": 17, "messageId": fixtureTask, "status": "todo", "claimedById": nil, "conversationAnchored": f.anchored}}})
+	case r.URL.Path == "/internal/agent-api/send":
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if f.updates == nil {
+			f.updates = map[string]string{}
+		}
+		key, _ := body["idempotencyKey"].(string)
+		encoded := string(canonical(body))
+		if previous, found := f.updates[key]; found && previous != encoded {
+			w.WriteHeader(409)
+			return
+		}
+		f.updates[key] = encoded
+		f.updateWrites++
+		if f.lostUpdate {
+			f.lostUpdate = false
+			w.WriteHeader(502)
+			return
+		}
+		encode(map[string]any{"ok": true, "state": "sent", "messageId": fixtureReport})
 	case r.URL.Path == "/internal/agent-api/tasks" && r.Method == "GET":
 		if f.forbidden {
 			w.WriteHeader(403)
+			return
+		}
+		if f.missingRoot {
+			encode(map[string]any{"tasks": []any{}})
 			return
 		}
 		if r.URL.Query().Get("channel") == "#test" {

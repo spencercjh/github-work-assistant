@@ -72,6 +72,7 @@ def main():
                     "credential": {"capabilities": ["read", "send", "tasks", "channels"]}}
         received = []
         task_owner = None
+        task_status = "todo"
 
         class API(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -94,7 +95,7 @@ def main():
                                             "agents": [{"name": "collector"}, {"name": "executor"}]})
                 if path == "/internal/agent-api/tasks":
                     return self.reply(200, {"tasks": [{"taskNumber": 17, "messageId": "11111111-1111-1111-1111-111111111111",
-                                                      "claimedByName": task_owner, "status": "in_progress" if task_owner else "todo"}]})
+                                                      "claimedByName": task_owner, "status": task_status}]})
                 self.reply(404, {})
 
             def do_POST(self):
@@ -104,6 +105,13 @@ def main():
                     return self.reply(404, {})
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 if args.delivery == "shared":
+                    if self.path == "/internal/agent-api/send":
+                        assert body["target"] == "#github-work:11111111"
+                        assert body["idempotencyKey"].startswith("github-update:")
+                        assert "@executor" in body["content"] and "恢复为 in_progress" in body["content"]
+                        assert body["continueAnyway"] is True
+                        received.append(body)
+                        return self.reply(200, {"ok": True, "state": "sent", "messageId": "22222222-2222-2222-2222-222222222222"})
                     assert self.path == "/internal/agent-api/tasks"
                     assert body["channel"] == "#github-work" and len(body["tasks"]) == 1 and "assignee" not in body
                     assert body["idempotencyKey"].startswith("github-task:")
@@ -135,6 +143,7 @@ def main():
         gh = root / "bin/gh"
         gh.write_text('''#!/usr/bin/env python3
 import json,sys,datetime
+from pathlib import Path
 a=sys.argv[1:]
 assert a[:5]==['api','--hostname','github.com','--method','GET'], 'non-GET rejected'
 p=a[5]
@@ -150,6 +159,7 @@ elif p.startswith('notifications?'):
 elif p=='repos/example/fixture': data={'full_name':'example/fixture','private':False}
 elif p=='repos/example/fixture/issues/1':
     data={'id':1,'number':1,'title':'fixture external prose @fixture-human','state':'open','body':'fixture issue body'}
+    if (Path(__file__).resolve().parents[1]/'updated').exists(): data['title'] += ' updated'
 elif p in ('repos/example/fixture/issues/1/comments?per_page=100','repos/example/fixture/issues/1/timeline?per_page=100'):
     assert a[6:]==['--paginate','--slurp']
     data=[[]]
@@ -221,12 +231,38 @@ print(json.dumps(data))
                 verify = cli + ["verify-claim", "--event", event]
                 run(verify + ["--executor", "@executor"], fail=True)  # Still unclaimed.
                 task_owner = "executor"  # Model a successful native Raft claim.
+                task_status = "in_progress"
                 assert run(verify + ["--executor", "@executor"], parse=True)["execute"] is True
                 assert run(verify + ["--executor", "@loser"], parse=True)["execute"] is False
                 declined = run(cli + ["record-triage", "--event", event, "--executor", "@loser", "--outcome", "quiet", "--reason-file", str(root / "reason")], parse=True)
                 assert declined["execute"] is False and declined["recorded"] is False
             run(cli + ["record-triage", "--event", event, "--executor", "@executor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
             assert not run(cli + ["pending"], parse=True)
+
+            if args.delivery == "shared":
+                task_status = "done"
+                (root / "updated").touch()
+                run(cli + ["collect"])
+                newer = next(e for e in run(cli + ["events"], parse=True) if e["event_id"] != event)
+                run(cli + ["deliver"])
+                assert len(received) == 2 and "target" in received[1], "new event forked a task"
+                context = run(cli + ["work-context", "--event", newer["event_id"]], parse=True)
+                assert context["discussion"]["messageId"] == "11111111-1111-1111-1111-111111111111"
+                assert context["event"]["receipt"]["notificationMessageId"] == "22222222-2222-2222-2222-222222222222"
+                assert task_owner == "executor" and task_status == "done", "collector changed task ownership/state"
+                newer_verify = cli + ["verify-claim", "--event", newer["event_id"]]
+                assert run(newer_verify + ["--executor", "@executor"], parse=True)["execute"] is False
+                task_status = "in_progress"  # The same owner reads the thread and resumes.
+                assert run(newer_verify + ["--executor", "@executor"], parse=True)["execute"] is True
+                run(cli + ["record-triage", "--event", newer["event_id"], "--executor", "@executor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
+                task_owner = "successor"  # An explicit manual handoff of the same task.
+                task_status = "todo"  # Assignment reserves ownership without starting work.
+                assert run(newer_verify + ["--executor", "@executor"], parse=True)["execute"] is False
+                assert run(newer_verify + ["--executor", "@successor"], parse=True)["execute"] is False
+                task_status = "in_progress"  # The assigned successor claims the original task.
+                assert run(newer_verify + ["--executor", "@successor"], parse=True)["execute"] is True
+                run(cli + ["deliver"])
+                assert len(received) == 2 and not run(cli + ["pending"], parse=True)
 
             preview = run(cli + ["cleanup", "--dry-run"], parse=True)
             assert preview["dry_run"] and preview["history_retention_days"] == 30

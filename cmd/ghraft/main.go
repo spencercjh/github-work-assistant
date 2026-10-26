@@ -100,7 +100,7 @@ func run() error {
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
 	needsClaim := c.SharedTasks() && (command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree")
-	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || needsClaim) {
+	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || command == "adopt-discussion" || needsClaim) {
 		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
 		if err != nil {
 			return err
@@ -156,7 +156,7 @@ func run() error {
 			return e
 		}
 		return err
-	case "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree":
+	case "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
@@ -230,7 +230,7 @@ func run() error {
 		}
 		return e
 	default:
-		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree")
+		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion")
 	}
 }
 
@@ -255,6 +255,14 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	var result any
 	var err error
 	switch command {
+	case "adopt-discussion":
+		result, err = svc.AdoptDiscussion(ctx, in.EventID, in.TaskID)
+	case "discussion-candidates":
+		var w app.WorkContext
+		w, err = svc.WorkContext(ctx, in.EventID)
+		if err == nil {
+			result, err = svc.Store.DiscussionCandidates(ctx, w.Event.Key, svc.Config.DeliveryTarget)
+		}
 	case "verify-claim":
 		if !svc.Config.SharedTasks() {
 			return errors.New("verify-claim requires shared task delivery")

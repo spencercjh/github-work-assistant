@@ -36,6 +36,10 @@ type Persistence interface {
 	Meta(context.Context, string, string) (string, error)
 	PutMeta(context.Context, string, string) error
 	PrepareDelivery(context.Context, string, string) (string, json.RawMessage, error)
+	Discussion(context.Context, string) (Discussion, error)
+	DiscussionCandidates(context.Context, string, string) ([]TaskDispatch, error)
+	PrepareDiscussion(context.Context, string, Discussion, string) (Discussion, error)
+	ConfirmDiscussion(context.Context, string, Discussion, TaskDispatch) error
 	Cleanup(context.Context, int, bool) (CleanupStats, error)
 	CollectionStatus(context.Context, string, error) error
 	RecordTriage(context.Context, Triage) error

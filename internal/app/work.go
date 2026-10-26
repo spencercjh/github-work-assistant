@@ -23,6 +23,7 @@ type WorkContext struct {
 	Stale          bool              `json:"stale"`
 	Guide          RepositoryGuide   `json:"guide"`
 	Task           *TaskLink         `json:"task,omitempty"`
+	Discussion     *TaskDispatch     `json:"discussion,omitempty"`
 	TaskAuthority  string            `json:"task_authority"`
 	History        []json.RawMessage `json:"processed_history"`
 }
@@ -79,6 +80,11 @@ func (s *Service) WorkContext(ctx context.Context, id string) (WorkContext, erro
 		return w, err
 	}
 	w.Stale = w.CurrentVersion != w.Event.Version
+	if d, e := s.Store.Discussion(ctx, w.Event.Key); e == nil {
+		w.Discussion = d.Task
+	} else if !errors.Is(e, ErrNotFound) {
+		return WorkContext{}, e
+	}
 	w.TaskAuthority = "Raft; task link and reports are agent-provided references. Read live Raft task state before creating, claiming or resuming work."
 
 	w.History, err = s.Store.History(ctx, w.Event.Key)

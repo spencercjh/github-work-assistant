@@ -28,7 +28,7 @@ func subjectOf(s Snapshot) eventSubject {
 	return eventSubject{kind, str(s.Objects["issue"]["title"])}
 }
 
-type eventNotice struct{ Title, Body string }
+type eventNotice struct{ Title, Body, Subject string }
 type noticeChange struct {
 	priority    int
 	label, text string
@@ -85,14 +85,16 @@ func (r *Raft) notice(ctx context.Context, ev Event) (eventNotice, error) {
 	private := p.Classification == "private"
 	hideMetadata := private && !r.Config.PrivateNotificationDetails
 	changes := describeChanges(p.Changes, p.Subject.Kind, hideMetadata, !private)
-	title := fmt.Sprintf("%s · %s %s %d", changes[0].label, watch.Repo, p.Subject.Kind, watch.Number)
+	subject := fmt.Sprintf("%s %s %d", watch.Repo, p.Subject.Kind, watch.Number)
 	if hideMetadata {
-		title = fmt.Sprintf("%s · 私有%s", changes[0].label, p.Subject.Kind)
-	} else if subject := noticeText(p.Subject.Title, 100); subject != "" {
-		title += " · " + subject
+		subject = "私有" + p.Subject.Kind
+	} else if text := noticeText(p.Subject.Title, 100); text != "" {
+		subject += " · " + text
 	}
+	title := changes[0].label + " · " + subject
 	if private && !hideMetadata {
 		title = "[私有] " + title
+		subject = "[私有] " + subject
 	}
 	lines := []string{}
 	for i, change := range changes {
@@ -114,7 +116,7 @@ func (r *Raft) notice(ctx context.Context, ev Event) (eventNotice, error) {
 			lines = append(lines, "私有仓库：本通知展示标题和变更摘要，评论正文保留在本机。")
 		}
 	}
-	return eventNotice{title, strings.Join(lines, "\n")}, nil
+	return eventNotice{Title: title, Body: strings.Join(lines, "\n"), Subject: subject}, nil
 }
 
 // Summaries report observed facts, not importance, authorization or recommended
