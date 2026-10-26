@@ -325,3 +325,56 @@ func TestNotificationClaimDoesNotTakeOverExistingEngineeringWork(t *testing.T) {
 		t.Fatal("former notification owner recorded work", err)
 	}
 }
+
+func TestDefaultReadOnlyReportUsesSharedTask(t *testing.T) {
+	for _, notify := range []string{"", "dm:@tester"} {
+		t.Run("notify="+notify, func(t *testing.T) {
+			f := &taskAPI{owner: "worker", status: "in_progress"}
+			svc, event := sharedFixture(t, f)
+			svc.Config.NotifyTarget = notify
+			deliverEvent(t, svc, event)
+			ctx := t.Context()
+			w, err := svc.WorkContext(ctx, event.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := WorkInput{Executor: "@worker", EventID: event.ID, EvidenceVersion: event.Version, GuideVersion: w.Guide.Version, TaskID: fixtureTask}
+			wrong := in
+			wrong.TaskID = fixtureReport
+			if _, err := svc.LinkTask(ctx, wrong); err == nil {
+				t.Fatal("linked a task outside the configured destination")
+			}
+			link, err := svc.LinkTask(ctx, in)
+			if err != nil || link.TaskID != fixtureTask || link.Target != svc.Config.DeliveryTarget {
+				t.Fatal("default read-only repository could not link its existing task", link, err)
+			}
+			result := WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "investigated", Summary: "Verified the updated documentation and reported the findings."}
+			f.owner = "successor"
+			if err := svc.RecordWorkResult(ctx, result); !errors.Is(err, ErrClaimUnavailable) {
+				t.Fatal("previous owner recorded a result after handoff", err)
+			}
+			f.owner = "worker"
+			if err := svc.RecordWorkResult(ctx, result); err != nil {
+				t.Fatal("could not save the investigation report", err)
+			}
+			w, err = svc.WorkContext(ctx, event.ID)
+			if err != nil || w.Task == nil || w.Task.Target != svc.Config.DeliveryTarget || len(w.History) != 1 || !strings.Contains(string(w.History[0]), fixtureReport) {
+				t.Fatal("report reference was not persisted", w.Task, w.History, err)
+			}
+			result.Outcome = "changes-ready"
+			if err := svc.RecordWorkResult(ctx, result); !errors.Is(err, ErrWorkDenied) {
+				t.Fatal("report linking granted edit authority", err)
+			}
+			result.Outcome = "merged"
+			if err := svc.RecordWorkResult(ctx, result); err == nil {
+				t.Fatal("report linking granted merge authority")
+			}
+			if _, err := svc.PrepareWorkspace(ctx, in, t.TempDir()); !errors.Is(err, ErrWorkDenied) {
+				t.Fatal("read-only repository permitted local changes", err)
+			}
+			if f.creates != 1 {
+				t.Fatal("reporting created another task", f.creates)
+			}
+		})
+	}
+}

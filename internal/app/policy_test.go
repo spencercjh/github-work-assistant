@@ -49,6 +49,31 @@ func TestTrustedGuideAndCommunityPolicy(t *testing.T) {
 	}
 }
 
+func TestDefaultGuideTaskDestination(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, delivery, notify, want string
+	}{
+		{"shared without extra notifications", "external", "#github-work", "", "#github-work"},
+		{"shared with extra notifications", "external", "#github-work", "dm:@tester", "#github-work"},
+		{"direct delivery", "external", "dm:@worker~agent", "dm:@tester", "dm:@tester"},
+		{"app delivery", "app", "", "dm:@tester", "dm:@tester"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Config{RaftMode: tc.mode, DeliveryTarget: tc.delivery, NotifyTarget: tc.notify}
+			g, err := c.RepositoryGuide("Project-HAMi/HAMi")
+			if err != nil || g.TaskTarget != tc.want || g.Mode != "read-only" || len(g.GitHubActions) != 0 {
+				t.Fatal("incorrect default reporting destination or authority", g, err)
+			}
+		})
+	}
+	c := localPolicy(t, "read-only")
+	c.RaftMode, c.DeliveryTarget = "external", "#github-work"
+	g, err := c.RepositoryGuide("example/fixture")
+	if err != nil || g.TaskTarget != "#test" {
+		t.Fatal("explicit repository destination was overridden", g, err)
+	}
+}
+
 func TestGuideCannotEscapeTrustedDirectory(t *testing.T) {
 	c := localPolicy(t, "read-only")
 	c.Repositories[0].GuideFile = "../outside.md"
