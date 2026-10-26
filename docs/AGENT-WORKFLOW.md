@@ -82,4 +82,4 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 首次发现的新事项会补查最近 `lookback_hours` 内的评论与评审，默认 6 小时；必须标明历史补查。配置了 `private_notifications_since` 时，首次观察私有事项不会补报早于该起点的评论。`baseline` 是当前背景，不能表述为刚发生的消息。迁入的既有事项继承快照与旧处理账本，不把已送达的评论重新报成新消息。
 
-私有事件带有 `data_classification=private` 标记。共享任务不展示私有仓库名称、链接或正文；从本机 `work-context` 读取内容，详细提醒只发到 `notify_target`，共享任务仅报告处理状态。跨仓库引用中，私有或可见性未知的来源会被排除。配置范围移除或 GitHub 权限检查失败时，停止处理，不绕过旧上下文的访问限制。
+私有事件带有 `data_classification=private` 标记。默认通知只展示变化类别；部署者明确启用 `private_notification_details` 后，可展示仓库、标题、参与者、检查名称和链接，评论正文仍在本机。通知摘要不能替代 `work-context` 中的完整证据；详细提醒只发到 `notify_target`，共享任务回复仅报告处理状态。跨仓库引用中，私有或可见性未知的来源会被排除。配置范围移除或 GitHub 权限检查失败时，停止处理，不绕过旧上下文的访问限制。

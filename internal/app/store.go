@@ -137,7 +137,7 @@ func (s *Store) Observe(ctx context.Context, key string, body []byte) (string, e
 		since = s.PrivateSince
 	}
 	delta, structured := changes([]byte(previousBody), body, time.Now(), s.LookbackHours, since)
-	payload, _ := json.Marshal(map[string]any{"event_id": id, "resource_key": key, "version": v, "previous_version": previous, "first_observation": previous == "", "data_classification": classification, "changes": delta})
+	payload, _ := json.Marshal(map[string]any{"event_id": id, "resource_key": key, "version": v, "previous_version": previous, "first_observation": previous == "", "data_classification": classification, "subject": subjectOf(current), "changes": delta})
 	e = tx.Upsert(ctx, &snapshotRecord{key, v, string(body), time.Now().Unix()}, []string{"resource_key"}, []string{"version_hash", "body", "observed_at"})
 	if e != nil {
 		return "", e

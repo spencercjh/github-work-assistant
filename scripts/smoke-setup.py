@@ -107,13 +107,19 @@ def main():
                     assert self.path == "/internal/agent-api/tasks"
                     assert body["channel"] == "#github-work" and len(body["tasks"]) == 1 and "assignee" not in body
                     assert body["idempotencyKey"].startswith("github-task:")
-                    assert "fixture external prose" not in json.dumps(body)
+                    title = body["tasks"][0]["title"]
+                    description = body["tasks"][0]["description"]
+                    assert "fixture external prose" in title and "＠fixture-human" in title
+                    assert "@fixture-human" not in title + description
+                    assert "fixture issue body" not in title + description
+                    assert "首次读取当前状态" in description and "事件 ID" in description
                     received.append(body)
                     return self.reply(200, {"tasks": [{"taskNumber": 17, "messageId": "11111111-1111-1111-1111-111111111111"}]})
                 assert body["target"] == "dm:@executor~agent"
                 assert body["idempotencyKey"].startswith("github:")
                 assert body["continueAnyway"] is True
-                assert "fixture external prose" not in body["content"]
+                assert "fixture external prose" in body["content"] and "＠fixture-human" in body["content"]
+                assert "@fixture-human" not in body["content"] and "fixture issue body" not in body["content"]
                 received.append(body)
                 self.reply(200, {"ok": True, "state": "sent", "messageId": "11111111-1111-1111-1111-111111111111"})
 
@@ -143,7 +149,7 @@ elif p.startswith('notifications?'):
             'repository':{'private':False}}]]
 elif p=='repos/example/fixture': data={'full_name':'example/fixture','private':False}
 elif p=='repos/example/fixture/issues/1':
-    data={'id':1,'number':1,'title':'fixture external prose','state':'open','body':'fixture external prose'}
+    data={'id':1,'number':1,'title':'fixture external prose @fixture-human','state':'open','body':'fixture issue body'}
 elif p in ('repos/example/fixture/issues/1/comments?per_page=100','repos/example/fixture/issues/1/timeline?per_page=100'):
     assert a[6:]==['--paginate','--slurp']
     data=[[]]
