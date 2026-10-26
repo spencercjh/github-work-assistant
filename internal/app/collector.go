@@ -126,6 +126,11 @@ func normalizeRow(kind string, row map[string]any) (string, map[string]any, bool
 	return kind + ":" + id, n, true
 }
 func (g GH) Collect(ctx context.Context, w Watch) ([]byte, error) {
+	return g.collect(ctx, w, false)
+}
+
+// Merge commit evidence belongs to fork verification, not ordinary PR changes.
+func (g GH) collect(ctx context.Context, w Watch, mergeEvidence bool) ([]byte, error) {
 	classification, e := g.RepositoryClassification(ctx, w.Repo)
 	if e != nil {
 		return nil, e
@@ -164,7 +169,7 @@ func (g GH) Collect(ctx context.Context, w Watch) ([]byte, error) {
 		if !shaRE.MatchString(baseSHA) {
 			return nil, errors.New("invalid base SHA")
 		}
-		if pull["merged"] == true {
+		if mergeEvidence && pull["merged"] == true {
 			po["merge_commit_sha"] = pull["merge_commit_sha"]
 		}
 		po["head"] = sha
