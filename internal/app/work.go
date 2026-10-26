@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -155,7 +156,7 @@ func (s *Service) LinkTask(ctx context.Context, in WorkInput) (TaskLink, error) 
 }
 
 func (s *Service) RecordWorkResult(ctx context.Context, in WorkResult) error {
-	if !uuidRE.MatchString(in.ReportID) || len(in.Summary) == 0 || len(in.Summary) > 8000 || (in.Outcome != "investigated" && in.Outcome != "changes-ready" && in.Outcome != "needs-decision") {
+	if !uuidRE.MatchString(in.ReportID) || len(in.Summary) == 0 || len(in.Summary) > 8000 || !slices.Contains([]string{"investigated", "changes-ready", "needs-decision", "waiting", "merged"}, in.Outcome) {
 		return errors.New("invalid work result")
 	}
 	w, err := s.CheckWork(ctx, in.WorkInput)
@@ -168,10 +169,29 @@ func (s *Service) RecordWorkResult(ctx context.Context, in WorkResult) error {
 	if in.Outcome == "changes-ready" && w.Guide.Mode != "local-edit" {
 		return ErrWorkDenied
 	}
+	if in.Outcome == "merged" {
+		var snapshot Snapshot
+		if !slices.Contains(w.Guide.GitHubActions, "merge") || json.Unmarshal(w.Snapshot, &snapshot) != nil || snapshot.Objects["pull"]["merged"] != true {
+			return errors.New("merged result requires delegated merge authority and refreshed merged PR evidence")
+		}
+	}
 	return s.Store.SaveWorkResult(ctx, w.Event.Key, in)
 }
 
 func (s *Service) registerWorkActions(m *http.ServeMux) {
+	m.HandleFunc("POST /api/actions/check-github-action", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var in GitHubActionInput
+		if decode(r, &in) != nil {
+			fail(w, 400, "INVALID_INPUT")
+			return
+		}
+		v, err := s.CheckGitHubAction(r.Context(), in)
+		if err != nil {
+			workError(w, err)
+			return
+		}
+		ok(w, v)
+	}))
 	for _, refresh := range []bool{false, true} {
 		name := "get-work-context"
 		if refresh {
@@ -222,7 +242,7 @@ func (s *Service) registerWorkActions(m *http.ServeMux) {
 			workError(w, err)
 			return
 		}
-		ok(w, map[string]any{"recorded": true, "raft_task_status_changed": false, "verification": "agent-reported evidence; remote writes remain unapproved"})
+		ok(w, map[string]any{"recorded": true, "raft_task_status_changed": false, "verification": "executor-reported result; merged outcomes also require captured merged PR state"})
 	}))
 }
 func workError(w http.ResponseWriter, err error) {

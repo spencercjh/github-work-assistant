@@ -99,7 +99,7 @@ func run() error {
 		secret = string(b)
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
-	needsClaim := c.SharedTasks() && (command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree")
+	needsClaim := c.SharedTasks() && (command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action")
 	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || command == "adopt-discussion" || needsClaim) {
 		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
 		if err != nil {
@@ -156,7 +156,7 @@ func run() error {
 			return e
 		}
 		return err
-	case "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion":
+	case "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
@@ -230,7 +230,7 @@ func run() error {
 		}
 		return e
 	default:
-		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion")
+		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work")
 	}
 }
 
@@ -244,7 +244,12 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	f.StringVar(&in.TaskID, "task", "", "Existing claimed Raft task root UUID")
 	repository := f.String("repo", "", "Existing local clone with the authorized GitHub origin")
 	report := f.String("report", "", "Actual Raft report UUID")
-	outcome := f.String("outcome", "", "investigated, changes-ready or needs-decision")
+	outcome := f.String("outcome", "", "investigated, changes-ready, needs-decision, waiting or merged")
+	action := f.String("action", "", "Delegated GitHub action to check")
+	head := f.String("head", "", "Reviewed PR head SHA")
+	base := f.String("base", "", "Reviewed PR base SHA")
+	request := f.String("request", "", "Operator-supplied UUID; reuse for retries of the same work request")
+	reason := f.String("reason-file", "", "UTF-8 operator work request reason")
 	summaryFile := f.String("summary-file", "", "UTF-8 file containing result summary")
 	if err := f.Parse(args); err != nil {
 		return err
@@ -255,6 +260,14 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	var result any
 	var err error
 	switch command {
+	case "request-work":
+		var body []byte
+		body, err = os.ReadFile(*reason)
+		if err == nil {
+			result, err = svc.RequestWork(ctx, in.EventID, *request, string(body))
+		}
+	case "check-github-action":
+		result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base})
 	case "adopt-discussion":
 		result, err = svc.AdoptDiscussion(ctx, in.EventID, in.TaskID)
 	case "discussion-candidates":

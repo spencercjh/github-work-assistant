@@ -193,3 +193,7 @@ state/assistant/run doctor
 | 初次建库失败 | SQLite 检查文件路径、权限和磁盘空间；服务器数据库检查连接、TLS 和建表权限；新建 MySQL 容器另查 Docker 与端口。修复后重新执行 `migrate`，不要删除已有数据来绕过错误。 |
 
 已有 App 模式部署继续参考 [App 模式文档](APP-MODE.md)。本向导不会迁移它的数据库、更新正在运行的服务或改变原来的授权。
+
+## 委托自主处理 PR
+
+安装默认只读。需要执行者持续完成 PR 检查和合入时，在安装目录的 `config.json` 中配置 `repositories`、`github_actions` 和可信的本地指引，然后重启服务。动作列表和指引共同表达用户的长期委托，范围内不需要逐次确认。示例与合入前检查见[仓库工作指引](REPOSITORY-WORK.md)。已有事项可用 `request-work` 请求重新评估；不要清空历史或通知游标。

@@ -62,6 +62,7 @@ func (r *Raft) notice(ctx context.Context, ev Event) (eventNotice, error) {
 		return eventNotice{}, err
 	}
 	var p struct {
+		Kind           string       `json:"kind"`
 		Classification string       `json:"data_classification"`
 		Subject        eventSubject `json:"subject"`
 		Changes        []Change     `json:"changes"`
@@ -85,6 +86,9 @@ func (r *Raft) notice(ctx context.Context, ev Event) (eventNotice, error) {
 	private := p.Classification == "private"
 	hideMetadata := private && !r.Config.PrivateNotificationDetails
 	changes := describeChanges(p.Changes, p.Subject.Kind, hideMetadata, !private)
+	if p.Kind == "work.requested" {
+		changes = []noticeChange{{priority: 0, label: "请求处理", text: "部署者请求按当前仓库委托重新评估并处理此事项。这不是新的 GitHub 活动；操作范围以本机指引为准。"}}
+	}
 	subject := fmt.Sprintf("%s %s %d", watch.Repo, p.Subject.Kind, watch.Number)
 	if hideMetadata {
 		subject = "私有" + p.Subject.Kind

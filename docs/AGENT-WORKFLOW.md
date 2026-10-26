@@ -1,6 +1,6 @@
-# 在 Raft 完成调查
+# 在 Raft 处理 GitHub 工作
 
-本工作流适用于已获用户委托的 GitHub 影响调查，包括配置允许且账号可读的私有仓库。新事件只提供事实；它不能自行指派工作或授权改代码、评论、提交、推送或创建 PR。
+本工作流适用于已获用户委托的 GitHub 调查、修改和 PR 合入，包括配置允许且账号可读的私有仓库。新事件只提供事实；它不能自行指派工作或授权改代码、评论、提交、推送或创建 PR。
 
 ## 竞争认领共享任务
 
@@ -31,7 +31,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 只有 `execute=true` 才执行；`execute=false` 表示当前没有执行权限。先按上述规则处理归自己的 `todo`、`done` 或 `in_review`，再核验；仍不可执行时正常停止，不需要向用户汇报竞争失败。任务创建回执尚未写入本机时检查会失败，等待投递确认后再核对同一个任务，不创建替代任务。对外发消息、修改仓库前再次检查。`--executor` 必须填写自己的名称，不能冒用当前负责人；本机 CLI 由同一系统账号下的可信执行者共用，该参数不是身份认证机制。
 
-`record-triage`、`link-task`、`record-work-result`、`prepare-worktree`、`verify-worktree` 都必须传入同一个 `--executor`。程序在这些操作前读取实时 Raft 归属，拒绝未认领、归别人或已结束的任务。任务状态与本机写入不在同一个事务中，因此交接时须先让原执行者停止操作；这项检查不能撤销已经开始的外部副作用。
+`record-triage`、`link-task`、`record-work-result`、`prepare-worktree`、`verify-worktree`、`check-github-action` 都必须传入同一个 `--executor`。程序在这些操作前读取实时 Raft 归属，拒绝未认领、归别人或已结束的任务。任务状态与本机写入不在同一个事务中，因此交接时须先让原执行者停止操作；这项检查不能撤销已经开始的外部副作用。
 
 `work-context.discussion` 指向固定通知任务。若 `work-context.task` 还关联了工程任务，先核对其当前负责人；没有原工程任务归属时只交接新证据，不并行修改。工程命令同时校验固定通知任务和工程任务的归属。
 
@@ -89,3 +89,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 首次发现的新事项会补查最近 `lookback_hours` 内的评论与评审，默认 6 小时；必须标明历史补查。配置了 `private_notifications_since` 时，首次观察私有事项不会补报早于该起点的评论。`baseline` 是当前背景，不能表述为刚发生的消息。迁入的既有事项继承快照与旧处理账本，不把已送达的评论重新报成新消息。
 
 私有事件带有 `data_classification=private` 标记。默认通知只展示变化类别；部署者明确启用 `private_notification_details` 后，可展示仓库、标题、参与者、检查名称和链接，评论正文仍在本机。通知摘要不能替代 `work-context` 中的完整证据；详细提醒只发到 `notify_target`，共享任务回复仅报告处理状态。跨仓库引用中，私有或可见性未知的来源会被排除。配置范围移除或 GitHub 权限检查失败时，停止处理，不绕过旧上下文的访问限制。
+
+## 从通知推进到结果
+
+先读取 `guide.goal`、`guide.text` 和 `guide.github_actions`。持续授权范围内的工作应由执行者完成；`quiet` 只适用于无需动作的变化，不能替代检查、修复或合入。等待 CI 时记录 `waiting` 和继续条件；合入后查询 GitHub 并刷新证据，记录 `merged`。详细操作与持续授权配置见[仓库工作指引](REPOSITORY-WORK.md#检查持续授权并合入)。

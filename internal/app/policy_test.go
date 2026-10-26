@@ -80,3 +80,35 @@ func TestGitHubReadAllowlist(t *testing.T) {
 		}
 	}
 }
+
+func TestDelegatedActionsNeedExplicitTrustedConfiguration(t *testing.T) {
+	c := localPolicy(t, "local-edit")
+	before, _ := c.RepositoryGuide("example/fixture")
+	if len(before.GitHubActions) != 0 {
+		t.Fatal("local editing implicitly granted remote writes")
+	}
+	c.Repositories[0].GitHubActions = []string{"merge", "comment"}
+	after, err := c.RepositoryGuide("example/fixture")
+	if err != nil || len(after.GitHubActions) != 2 || before.Version == after.Version {
+		t.Fatal("delegation absent from trusted version", err)
+	}
+	unknown, _ := c.RepositoryGuide("other/repo")
+	if len(unknown.GitHubActions) != 0 {
+		t.Fatal("delegation leaked to another repository")
+	}
+	for _, actions := range [][]string{{"admin"}, {"merge", "merge"}} {
+		c.Repositories[0].GitHubActions = actions
+		if _, err = c.RepositoryGuide("example/fixture"); err == nil {
+			t.Fatal("invalid delegation accepted", actions)
+		}
+	}
+	c.Repositories[0].GitHubActions = []string{"merge"}
+	c.Repositories[0].Mode = "read-only"
+	if _, err = c.RepositoryGuide("example/fixture"); err == nil {
+		t.Fatal("read-only mode granted writes")
+	}
+	c.Repositories[0].Repo = "Project-HAMi/HAMi"
+	if _, err = c.RepositoryGuide("Project-HAMi/HAMi"); err == nil {
+		t.Fatal("community rule bypassed through github_actions")
+	}
+}

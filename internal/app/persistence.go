@@ -22,6 +22,7 @@ type Persistence interface {
 	Secret(context.Context, string) ([]byte, error)
 	DeleteSecret(context.Context, string) error
 	Observe(context.Context, string, []byte) (string, error)
+	RequestWork(context.Context, string, string, string, string) (Event, error)
 	Snapshot(context.Context, string) (json.RawMessage, string, error)
 	ObservedAt(context.Context, string) (int64, error)
 	Event(context.Context, string) (Event, error)
