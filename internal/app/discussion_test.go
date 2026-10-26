@@ -143,6 +143,9 @@ func TestDiscussionReplyIsFrozenAcrossLostReceiptRestartAndHandoff(t *testing.T)
 		t.Fatal("lost reply acknowledged")
 	}
 	frozen := f.updates["github-update:"+second.ID]
+	// Simulate an outbox written before the required draft protocol flag was
+	// added. A retry must still preserve the message body and idempotency key.
+	omitStoredDraftFlag(t, svc.Store, second.ID)
 	svc.Raft.Store, svc.Store = openTestStore(t), openTestStore(t)
 	f.owner = "successor"
 	f.status = "done"

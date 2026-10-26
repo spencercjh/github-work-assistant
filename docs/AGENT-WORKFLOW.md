@@ -62,7 +62,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
   --message "$MESSAGE_ID" --target "$NOTIFY_TARGET"
 ```
 
-未配置 `notify_target` 时不能记录为已通知。已有工程工作使用 `link-task` 与 `record-work-result`，参数见[仓库工作指引](REPOSITORY-WORK.md)。以下 App actions 是另一种接入方式；External 模式没有 HTTP manifest，也不执行 integration login。
+共享任务的进展、结果和需要用户决定的事项留在对应讨论区。未配置 `notify_target` 时不额外私聊，也不能使用 `notified` 记录。将原任务通过 `link-task` 关联，再用 `record-work-result` 保存讨论中的报告；无需动作的事件使用 `quiet`。参数见[仓库工作指引](REPOSITORY-WORK.md)。以下 App actions 是另一种接入方式；External 模式没有 HTTP manifest，也不执行 integration login。
 
 ## App 模式
 
@@ -84,7 +84,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 用户委托持续跟踪时，通过 `get-event` 读取当次前后变化，再通过 `get-context` 核对当前状态和历史处理记录。`list-pending` 返回尚未完成语义判断的事件，包括 Raft 已接收的事件。
 
-有价值变化通过 Raft CLI 发送到配置的 `notify_target`。发送成功后用 `record-triage` 保存 outcome=notified、实际消息 UUID、目标和判断依据。无需提醒时保存 outcome=quiet，并省略 message_id/target。先发再记；发送结果不确定时先查消息历史，不重复发送。App 本身不代替 Agent 发人类提醒。
+共享任务继续在原讨论区报告。用户明确配置了额外的 `notify_target` 时，才向该目标发送提醒，并用 `record-triage` 保存 outcome=notified、实际消息 UUID、目标和判断依据。无需提醒时保存 outcome=quiet，并省略 message_id/target。先发再记；发送结果不确定时先查消息历史，不重复发送。App 本身不代替 Agent 发人类提醒。
 
 首次发现的新事项会补查最近 `lookback_hours` 内的评论与评审，默认 6 小时；必须标明历史补查。配置了 `private_notifications_since` 时，首次观察私有事项不会补报早于该起点的评论。`baseline` 是当前背景，不能表述为刚发生的消息。迁入的既有事项继承快照与旧处理账本，不把已送达的评论重新报成新消息。
 

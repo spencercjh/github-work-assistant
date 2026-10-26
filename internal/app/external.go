@@ -86,6 +86,7 @@ func (r *Raft) sendExternal(ctx context.Context, ev Event) ([]byte, error) {
 		// This is an append-only feed, never a reply based on conversation state.
 		// Do not consume human messages merely to unblock automatic delivery.
 		"continueAnyway": true,
+		"sendDraft":      true,
 	}
 	if r.Store == nil {
 		return nil, errors.New("external delivery requires a durable store")
@@ -108,6 +109,9 @@ func (r *Raft) sendExternal(ctx context.Context, ev Event) ([]byte, error) {
 		return nil, errors.New("pending delivery belongs to a different identity or recipient")
 	}
 	body = persisted.Request
+	// The immutable outbox is the saved draft. Also supply the required flag
+	// for old envelopes without changing their message identity or content.
+	body["sendDraft"] = true
 	raw, _, err := r.request(ctx, "/internal/agent-api/send", body, r.Credential, false)
 	if err != nil {
 		return nil, err

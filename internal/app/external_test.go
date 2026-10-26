@@ -94,6 +94,11 @@ func TestExternalDeliverySurvivesLostResponseAndRestart(t *testing.T) {
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
+		if body["continueAnyway"] == true && body["sendDraft"] != true {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "--send-draft --anyway requires a saved draft"})
+			return
+		}
 		encoded := string(canonical(body))
 		if first == "" {
 			first = encoded
@@ -116,6 +121,7 @@ func TestExternalDeliverySurvivesLostResponseAndRestart(t *testing.T) {
 	if _, err := r.Send(ctx, events[0]); err == nil {
 		t.Fatal("lost response considered delivered")
 	}
+	omitStoredDraftFlag(t, store, id)
 	reopened := openTestStore(t)
 	r.Store = reopened
 	r.Config.configDir = "/a/new/build/location" // persisted request must win over updated formatting
@@ -148,6 +154,20 @@ func TestExternalDeliverySurvivesLostResponseAndRestart(t *testing.T) {
 	}
 	if _, err := r.Send(ctx, events[0]); err != nil || attempts != 5 {
 		t.Fatal("accepted event was resent after request cleanup", attempts, err)
+	}
+}
+
+func omitStoredDraftFlag(t *testing.T, store Persistence, id string) {
+	t.Helper()
+	key := "external-delivery:" + id
+	saved, err := store.Meta(t.Context(), key, "")
+	var envelope map[string]any
+	if err != nil || json.Unmarshal([]byte(saved), &envelope) != nil {
+		t.Fatal("missing frozen request", err)
+	}
+	delete(envelope["request"].(map[string]any), "sendDraft")
+	if err = store.PutMeta(t.Context(), key, string(canonical(envelope))); err != nil {
+		t.Fatal(err)
 	}
 }
 

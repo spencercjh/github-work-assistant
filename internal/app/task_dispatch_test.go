@@ -70,6 +70,13 @@ func (f *taskAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/internal/agent-api/send":
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		// The server only accepts continueAnyway for a saved draft. Reproduce
+		// the real rejection so an outbox send cannot pass with missing flags.
+		if body["continueAnyway"] == true && body["sendDraft"] != true {
+			w.WriteHeader(http.StatusBadRequest)
+			encode(map[string]string{"error": "--send-draft --anyway requires a saved draft"})
+			return
+		}
 		if f.updates == nil {
 			f.updates = map[string]string{}
 		}

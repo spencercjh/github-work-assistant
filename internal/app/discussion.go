@@ -121,6 +121,7 @@ func (r *Raft) appendDiscussion(ctx context.Context, ev Event, root TaskDispatch
 		Content  string `json:"content"`
 		Key      string `json:"idempotencyKey"`
 		Continue bool   `json:"continueAnyway"`
+		Draft    bool   `json:"sendDraft"`
 	}
 	type envelope struct {
 		Identity  string         `json:"identity"`
@@ -128,7 +129,7 @@ func (r *Raft) appendDiscussion(ctx context.Context, ev Event, root TaskDispatch
 		Task      TaskDispatch   `json:"task"`
 		Request   messageRequest `json:"request"`
 	}
-	proposed := envelope{r.Config.ExternalAgent, time.Now().Unix(), root, messageRequest{root.target(), content, "github-update:" + ev.ID, true}}
+	proposed := envelope{r.Config.ExternalAgent, time.Now().Unix(), root, messageRequest{root.target(), content, "github-update:" + ev.ID, true, true}}
 	saved, accepted, err := r.Store.PrepareDelivery(ctx, ev.ID, string(canonical(proposed)))
 	if err != nil {
 		return nil, err
@@ -145,6 +146,10 @@ func (r *Raft) appendDiscussion(ctx context.Context, ev Event, root TaskDispatch
 	}
 	// An append-only event does not consume unread human messages or change task
 	// status/ownership. The actual executor reads those messages before resuming.
+	// PrepareDelivery has persisted this exact message as our draft. The server
+	// requires sendDraft together with continueAnyway. Older outbox envelopes
+	// omitted that protocol flag; keep their target/content/key unchanged.
+	pending.Request.Draft = true
 	raw, _, err := r.request(ctx, "/internal/agent-api/send", pending.Request, r.Credential, false)
 	if err != nil {
 		return nil, err
