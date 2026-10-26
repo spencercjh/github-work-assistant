@@ -18,6 +18,13 @@ type eventSubject struct {
 }
 
 func subjectOf(s Snapshot) eventSubject {
+	if f := s.Objects["fork"]; f != nil {
+		title := str(f["target_repo"]) + " · " + str(f["target_branch"])
+		if number, ok := f["pr"].(float64); ok && number > 0 {
+			title += fmt.Sprintf(" · 同步 PR %d", int(number))
+		}
+		return eventSubject{"Fork", title}
+	}
 	if s.Objects["issue"] == nil {
 		return eventSubject{}
 	}
@@ -57,6 +64,9 @@ func noticeMarkdown(s string) string {
 }
 
 func (r *Raft) notice(ctx context.Context, ev Event) (eventNotice, error) {
+	if f, ok := r.Config.Fork(ev.Key); ok {
+		return r.forkNotice(ev, f)
+	}
 	watch, err := resourceWatch(ev.Key)
 	if err != nil {
 		return eventNotice{}, err

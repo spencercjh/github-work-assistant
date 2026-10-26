@@ -14,6 +14,9 @@ var ErrNotFound = database.ErrNotFound
 // envelopes, and stale evidence rejection. It deliberately exposes no SQL connection or transaction.
 // A non-SQL implementation can satisfy this interface without changing services.
 type Persistence interface {
+	ForkProgress(context.Context, string) (ForkProgress, error)
+	ObserveFork(context.Context, ForkSpec, ForkProgress, ForkObservation) error
+	SaveForkProgress(context.Context, string, int64, ForkProgress, *WorkResult) error
 	Close() error
 	Migrate(context.Context) error
 	Ping(context.Context) error

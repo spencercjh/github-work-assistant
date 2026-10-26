@@ -23,6 +23,7 @@
   "notify_target": "dm:@your-human",
   "lookback_hours": 6,
   "workspace_root": "state/worktrees",
+  "forks": [],
   "repositories": [
     {
       "repo": "Project-HAMi/HAMi",

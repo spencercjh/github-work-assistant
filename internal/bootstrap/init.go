@@ -364,7 +364,7 @@ func executorGuide(root, notify, channel string) string {
 		competition = fmt.Sprintf(`
 ## 先认领共享任务
 
-每个 PR/Issue 在 %s 只保留一个固定任务和讨论区，执行者由频道成员管理。首次创建时，执行者由频道成员竞争认领；认领后持续负责，任务完成不解除归属。后续事件追加到原讨论区并提醒原负责人，不创建新任务。先读取原任务的当前归属和完整讨论；根描述只包含首次事件，后续事件 ID 以新增消息为准。原任务为 todo 且未分配，或 todo 且已指派给自己时，使用你自己的 Raft 身份运行以下命令；已指派给别人时不得竞争：
+每个 PR/Issue 或 fork 维护规则在 %s 只保留一个固定任务和讨论区，执行者由频道成员管理。首次创建时，执行者由频道成员竞争认领；认领后持续负责，任务完成不解除归属。后续事件追加到原讨论区并提醒原负责人，不创建新任务。先读取原任务的当前归属和完整讨论；根描述只包含首次事件，后续事件 ID 以新增消息为准。原任务为 todo 且未分配，或 todo 且已指派给自己时，使用你自己的 Raft 身份运行以下命令；已指派给别人时不得竞争：
 
     raft task claim --target %s --number <本任务编号>
 
@@ -376,7 +376,7 @@ func executorGuide(root, notify, channel string) string {
 
 只有 execute=true 才执行。execute=false 表示当前没有执行权限；先按上述规则处理归自己的 todo、done 或 in_review，再核验，仍不可执行时静默退出。投递回执尚未落库时等待本次投递确认，不另建任务。程序连接失败时不执行。该检查使用实时任务归属；--executor 不能填写别人的名称。所有 Agent 共享本机账号，这个参数用于检查协作流程，不提供系统用户隔离。
 
-record-triage、link-task、record-work-result、prepare-worktree、verify-worktree、check-github-action 都要带同一个 --executor；写入前会再次核对任务归属。向用户发送消息或修改仓库前也要重新 verify-claim。已经处理的事件不重复执行。work-context.discussion 是固定通知任务，work-context.task 是可选的工程任务。已有工程任务继续由其负责人处理；未取得原工程任务归属时只交接，不并行修改。旧事件的通知回执可能指向历史任务，执行归属以 discussion 和原任务当前状态为准。
+record-triage、link-task、record-work-result、prepare-worktree、verify-worktree、test-worktree、restart-sync、check-github-action 都要带同一个 --executor；写入前会再次核对任务归属。向用户发送消息或修改仓库前也要重新 verify-claim。已经处理的事件不重复执行。work-context.discussion 是固定通知任务，work-context.task 是可选的工程任务。已有工程任务继续由其负责人处理；未取得原工程任务归属时只交接，不并行修改。旧事件的通知回执可能指向历史任务，执行归属以 discussion 和原任务当前状态为准。
 
 结束前读取原讨论区及 pending 中属于本事项的未处理事件，逐项保存判断；再把原任务更新为 in_review，按用户确认结束。负责人持续保留，后续变化仍在同一讨论区处理。只有用户明确要求才交接：先让原负责人停止，再由有权限的用户在原任务上 assign 给接手者。程序不会自动 unclaim、改派或重开 closed 任务；执行者也不得因完成、离线或超时自行交接。升级时需要 adopt-discussion 选择历史任务的操作由部署者明确决定，执行者不能自行选择。
 `, channel, shellQuote(channel), shellQuote(filepath.Join(root, "run")))
@@ -401,6 +401,16 @@ record-triage、link-task、record-work-result、prepare-worktree、verify-workt
 github_actions 中已委托的动作由你通过 gh 执行；执行前完成 link-task，再运行 check-github-action，带上 --action、--event、--executor、--version、--guide、--task，以及 PR 的 --head 和 --base。只有 permitted=true 才通过该检查；execute=false 是无权执行。检查只确认授权、归属和版本，合入质量仍由你判断。合入使用 gh pr merge --match-head-commit <已核验SHA> 和仓库允许的方式，不用 --admin 绕过规则。范围外动作或无法判断的业务取舍，才向用户提出具体问题。
 
 操作后查询 GitHub 实际结果。调用超时先查远端是否已成功，不盲目重发评论或推送；合入后刷新上下文，以已合入的新事件和证据记录 merged，附实际合并 SHA/链接。已排队自动合入不等于已合入。record-work-result 保存结果及证据版本；waiting 不代表已经完成。简单、无需动作的通知才使用 record-triage 的 quiet 或 notified；后者须先真正发送通知，再保存消息 UUID 和配置的目标。检查成功或机器人回复不必逐条提醒用户，只汇报完成结果、具体阻塞或需要决定的事项。pending 可列出尚未判断的事件。完整命令见仓库 docs/AGENT-WORKFLOW.md。
+
+## 持续维护有定制改动的 fork
+
+work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha、sync_branch 和已有 pr。按可信仓库指引理解定制能力，用上游改动和回归测试判断如何适配；本轮提交固定，新上游更新留到下一轮。同步 PR 的评审和检查仍属于这项维护工作，不另建任务。
+
+先 link-task，获取目标仓库与上游的已核验提交，然后 prepare-worktree --repo <目标仓库本地克隆>。冲突解决后按仓库约定提交；再次 prepare-worktree，直到本轮上游和当前目标都已包含在工作分支。工作区按轮次复用，不能重置已有适配。运行 test-worktree，只有 passed=true 才取得与当前提交、目标和指引绑定的测试结果。prepare-worktree 和 verify-worktree 不代表测试通过。
+
+每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr 只能使用 sync_branch，merge 使用目标分支。只允许正常推送并保留历史；PR 必须采用 merge commit。只配置 push/open-pr 时，由人完成合入，仍可核验结果并记录 merged。GitHub PR 已合入后，刷新并读取 current_event_id 对应的新事件，等待投递确认，重新关联版本，再保存 merged；程序检查实际合并提交的树和祖先关系。旧事件不能代表新的核验结果。
+
+waiting 保存等待条件，needs-decision 保存必须由人决定的具体问题；不可用 quiet 代替维护结果。处理超时会有限次唤醒原负责人，不交给其他执行者。PR 被关闭但未合入时先解释原因；只有决定重试后才 restart-sync，新轮次不继承旧测试证据。详细配置、操作和恢复方法见仓库 docs/FORK-MAINTENANCE.md。
 
 %s 不要将本目录 private/ 中的文件内容写进消息、报告或日志。
 

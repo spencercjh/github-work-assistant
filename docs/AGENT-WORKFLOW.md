@@ -4,7 +4,7 @@
 
 ## 竞争认领共享任务
 
-频道投递时，每个 PR/Issue 对应一个固定任务和讨论区。首次创建为未分配任务，频道成员竞争认领；认领后由该负责人持续处理，后续事件追加到原讨论区并提醒负责人。任务完成不会清除归属，也不会重新创建任务。
+频道投递时，每个 PR/Issue 或 fork 维护规则对应一个固定任务和讨论区。首次创建为未分配任务，频道成员竞争认领；认领后由该负责人持续处理，后续事件追加到原讨论区并提醒负责人。任务完成不会清除归属，也不会重新创建任务。
 
 用户需提前委托执行者。首次接手时，使用自己的 Raft 身份读取任务及完整讨论。运行 `raft task list --target '#github-work'` 查看当前归属和操作约定；任务描述包含首次事件，后续事件 ID 在新增消息中。原任务为 `todo` 且未分配，或 `todo` 且已指派给自己时，执行以下命令开始工作；已指派给别人时不得竞争：
 
@@ -31,7 +31,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 只有 `execute=true` 才执行；`execute=false` 表示当前没有执行权限。先按上述规则处理归自己的 `todo`、`done` 或 `in_review`，再核验；仍不可执行时正常停止，不需要向用户汇报竞争失败。任务创建回执尚未写入本机时检查会失败，等待投递确认后再核对同一个任务，不创建替代任务。对外发消息、修改仓库前再次检查。`--executor` 必须填写自己的名称，不能冒用当前负责人；本机 CLI 由同一系统账号下的可信执行者共用，该参数不是身份认证机制。
 
-`record-triage`、`link-task`、`record-work-result`、`prepare-worktree`、`verify-worktree`、`check-github-action` 都必须传入同一个 `--executor`。程序在这些操作前读取实时 Raft 归属，拒绝未认领、归别人或已结束的任务。任务状态与本机写入不在同一个事务中，因此交接时须先让原执行者停止操作；这项检查不能撤销已经开始的外部副作用。
+`record-triage`、`link-task`、`record-work-result`、`prepare-worktree`、`verify-worktree`、`test-worktree`、`restart-sync`、`check-github-action` 都必须传入同一个 `--executor`。程序在这些操作前读取实时 Raft 归属，拒绝未认领、归别人或已结束的任务。任务状态与本机写入不在同一个事务中，因此交接时须先让原执行者停止操作；这项检查不能撤销已经开始的外部副作用。
 
 `work-context.discussion` 指向固定通知任务。若 `work-context.task` 还关联了工程任务，先核对其当前负责人；没有原工程任务归属时只交接新证据，不并行修改。工程命令同时校验固定通知任务和工程任务的归属。
 
@@ -93,3 +93,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 ## 从通知推进到结果
 
 先读取 `guide.goal`、`guide.text` 和 `guide.github_actions`。持续授权范围内的工作应由执行者完成；`quiet` 只适用于无需动作的变化，不能替代检查、修复或合入。等待 CI 时记录 `waiting` 和继续条件；合入后查询 GitHub 并刷新证据，记录 `merged`。详细操作与持续授权配置见[仓库工作指引](REPOSITORY-WORK.md#检查持续授权并合入)。
+
+## 持续维护 fork
+
+当上下文包含 `fork` 时，按[持续维护 fork](FORK-MAINTENANCE.md)执行固定轮次的整合、回归测试和结果核验。每条规则沿用同一项工作，生成的同步 PR 不参与普通 PR 竞争；新上游提交留到当前轮次结束后处理。

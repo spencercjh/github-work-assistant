@@ -164,6 +164,9 @@ func (g GH) Collect(ctx context.Context, w Watch) ([]byte, error) {
 		if !shaRE.MatchString(baseSHA) {
 			return nil, errors.New("invalid base SHA")
 		}
+		if pull["merged"] == true {
+			po["merge_commit_sha"] = pull["merge_commit_sha"]
+		}
 		po["head"] = sha
 		po["base"] = obj(pull["base"])["ref"]
 		po["base_sha"] = baseSHA
@@ -202,7 +205,7 @@ func (g GH) Collect(ctx context.Context, w Watch) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if str(obj(latest["head"])["sha"]) != str(pull["head"]) || str(obj(latest["base"])["sha"]) != str(pull["base_sha"]) {
+		if str(obj(latest["head"])["sha"]) != str(pull["head"]) || str(obj(latest["base"])["sha"]) != str(pull["base_sha"]) || latest["merged"] != pull["merged"] || latest["state"] != pull["state"] {
 			return nil, errors.New("PR revisions changed during collection; retry required")
 		}
 	}

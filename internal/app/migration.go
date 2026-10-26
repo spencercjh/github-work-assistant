@@ -22,6 +22,9 @@ func changes(previous, current []byte, now time.Time, lookback int, notBefore ti
 	if json.Unmarshal(current, &new) != nil || new.Objects == nil {
 		return nil, false
 	}
+	if f := new.Objects["fork"]; f != nil && str(f["round"]) == "" {
+		return []Change{}, true
+	}
 	_ = json.Unmarshal(previous, &old)
 	out := []Change{}
 	keys := []string{}
@@ -41,7 +44,7 @@ func changes(previous, current []byte, now time.Time, lookback int, notBefore ti
 		}
 		if old.Objects == nil {
 			kind = "backfill"
-			if k == "issue" || k == "pull" {
+			if k == "issue" || k == "pull" || k == "fork" {
 				kind = "baseline"
 			} else {
 				prefix := strings.SplitN(k, ":", 2)[0]

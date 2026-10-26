@@ -2,12 +2,18 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 )
 
 // Reconcile operator configuration before collection, including removed explicit watches.
 func (s *Service) reconcileWatches(ctx context.Context) error {
+	for _, f := range s.Config.Forks {
+		if err := s.Store.RegisterAccess(ctx, f.Key(), "explicit"); err != nil {
+			return err
+		}
+	}
 	for _, w := range s.Config.Watches {
 		if err := s.Store.RegisterWatch(ctx, w); err != nil {
 			return err
@@ -22,6 +28,15 @@ func (s *Service) reconcileWatches(ctx context.Context) error {
 }
 
 func (s *Service) watchConfigured(ctx context.Context, key string) bool {
+	if _, ok := s.Config.Fork(key); ok {
+		return true
+	}
+	if w, err := resourceWatch(key); err == nil {
+		owner, err := s.Store.Meta(ctx, forkPRName(w), "")
+		if err != nil || owner != "" {
+			return false
+		}
+	}
 	key = strings.ToLower(key)
 	private, err := s.Store.Meta(ctx, "private-watch:"+key, "false")
 	repo, _, _ := strings.Cut(key, "#")
@@ -39,6 +54,9 @@ func (s *Service) watchConfigured(ctx context.Context, key string) bool {
 }
 
 func (s *Service) allowed(ctx context.Context, key string) bool {
+	if f, ok := s.Config.Fork(key); ok {
+		return s.forkAllowed(ctx, f)
+	}
 	if !s.watchConfigured(ctx, key) {
 		return false
 	}
@@ -78,6 +96,10 @@ func (s *Service) collectWatch(ctx context.Context, w Watch) error {
 	}
 	if err != nil {
 		return err
+	}
+	var snapshot Snapshot
+	if json.Unmarshal(b, &snapshot) == nil && s.Config.managedPR(w, snapshot) {
+		return nil
 	}
 	if _, err = s.Store.Observe(ctx, w.Key(), b); err != nil {
 		return err

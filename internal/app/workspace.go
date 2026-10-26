@@ -73,6 +73,11 @@ func (s *Service) workspacePaths(id string) (string, string, error) {
 // PrepareWorkspace operates on an existing local clone. The Raft agent fetches through gh first.
 // It leaves a merge uncommitted for the agent to resolve and test, preserving both original revisions.
 func (s *Service) PrepareWorkspace(ctx context.Context, in WorkInput, repository string) (Workspace, error) {
+	if w, err := s.CheckWork(ctx, in); err != nil {
+		return Workspace{}, err
+	} else if w.Fork != nil {
+		return s.prepareForkWorkspace(ctx, w, in, repository)
+	}
 	w, head, base, err := s.workspaceInput(ctx, in)
 	if err != nil {
 		return Workspace{}, err
@@ -140,6 +145,11 @@ func githubOriginMatches(remote, repo string) bool {
 // VerifyWorkspace checks the local evidence; it deliberately does not claim that project tests ran.
 // Run refresh-work-context first to check remote revisions, then execute the configured tests in Raft.
 func (s *Service) VerifyWorkspace(ctx context.Context, in WorkInput) (Workspace, error) {
+	if w, err := s.CheckWork(ctx, in); err != nil {
+		return Workspace{}, err
+	} else if w.Fork != nil {
+		return s.verifyForkWorkspace(ctx, w, in)
+	}
 	w, head, base, err := s.workspaceInput(ctx, in)
 	if err != nil {
 		return Workspace{}, err
