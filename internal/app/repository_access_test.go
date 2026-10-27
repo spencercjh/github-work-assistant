@@ -217,3 +217,32 @@ func TestPrivateHistoryAccessAndTaskDelivery(t *testing.T) {
 		t.Fatal("public transition exposed private history", err)
 	}
 }
+
+func TestNotificationExclusionPreservesExplicitForkCollection(t *testing.T) {
+	g, fixture, f, _, _ := independentForkFixture(t)
+	g.NotificationExcludeRepositories = []string{"EXAMPLE/FIXTURE"}
+	if err := (Config{NotificationExcludeRepositories: g.NotificationExcludeRepositories}).validateRepositoryAccess(); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range [][]string{{"example/*"}, {"../repo"}, {"example/fixture", "EXAMPLE/FIXTURE"}} {
+		if err := (Config{NotificationExcludeRepositories: invalid}).validateRepositoryAccess(); err == nil {
+			t.Fatal("invalid exclusion accepted", invalid)
+		}
+	}
+	notification := func(repo, updated string, private bool) map[string]any {
+		return map[string]any{"subject": map[string]any{"type": "PullRequest", "url": "https://api.github.com/repos/" + repo + "/pulls/1"}, "repository": map[string]any{"full_name": repo, "private": private}, "updated_at": updated}
+	}
+	data := readFixture(t, fixture)
+	data["notifications?all=true&per_page=50&since=2026-10-25T15%3A00%3A00Z"] = []any{[]any{
+		notification("example/fixture", "2026-10-25T16:00:00Z", true),
+		notification("public/repo", "2026-10-25T15:01:00Z", false),
+	}}
+	writeFixture(t, fixture, data)
+	got, cursor, err := g.Discover(t.Context(), "2026-10-25T15:00:00Z")
+	if err != nil || len(got) != 1 || got[0].Key() != "public/repo#1" || cursor != "2026-10-25T15:58:00Z" {
+		t.Fatal("excluded notification leaked or blocked cursor", got, cursor, err)
+	}
+	if _, err = g.CollectFork(t.Context(), f, ForkProgress{}); err != nil {
+		t.Fatal("notification exclusion blocked explicit fork", err)
+	}
+}
