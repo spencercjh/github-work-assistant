@@ -23,6 +23,8 @@ if a[6:] not in ([],['--paginate','--slurp']):
     sys.exit('unsupported gh arguments')
 with open(os.environ['GHRAFT_FIXTURE']) as f: data=json.load(f)
 p=a[5]
+if os.environ.get('GHRAFT_REQUEST_LOG'):
+    with open(os.environ['GHRAFT_REQUEST_LOG'],'a') as f: f.write(p+'\n')
 if p not in data: sys.exit('unconfigured fixture endpoint')
 if isinstance(data[p],dict) and '_http_status' in data[p]:
     if '_body' in data[p]: print(json.dumps(data[p]['_body']))

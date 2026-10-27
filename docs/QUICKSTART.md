@@ -94,7 +94,19 @@ state/my-assistant/run doctor
 "watches": [{"repo": "your-name/your-repo", "number": 123}]
 ```
 
-自动发现由 `discover_notifications` 控制；关闭时必须保留至少一个固定关注对象。默认 `poll_seconds=120`，最小 60 秒。程序尚未根据 GitHub `X-Poll-Interval` 动态调整周期，关注对象较多时需结合账号限额增加间隔。
+自动发现由 `discover_notifications` 控制；关闭时必须保留至少一个固定关注对象或 fork 维护规则。默认 `poll_seconds=120`，最小 60 秒。普通 Issue／PR 的后台轮询按状态处理：
+
+| 状态或触发条件 | 查询行为 |
+| --- | --- |
+| 首次关注、仍打开 | 每轮完整刷新，包含评论、评审和当前提交的 CI。CI 更新不一定改变 Issue 的更新时间，不能仅凭该时间跳过查询。 |
+| 已关闭或合并 | 停止定时轮询，不再定期读取状态、评论、评审或 CI。升级和重启后仍保持停止。 |
+| 已结束事项收到新 Notifications | 下一轮完整刷新一次。重叠发现窗口里的同一条通知不重复触发；刷新失败会保留触发记录，重启后继续处理。 |
+| 执行者主动刷新、操作前校验或任务收尾 | 实时完整查询，不受后台停止轮询的限制。 |
+| 刷新发现事项重新打开 | 恢复正常轮询，并沿用已有工作关联。 |
+
+已结束事项不保留小时检查或每日核对。如果重开没有产生可读取的个人 Notifications，需要主动执行 `refresh-work-context` 才能发现；关闭自动发现时，同样需要主动刷新。既有快照、未处理事件及工作关联继续保留，停止轮询不等于删除数据或自动忽略待处理事件。
+
+持续 fork 维护规则继续轮询上游分支和同步 PR，不因某个同步 PR 合并而停止。遇到 GitHub 限流时，程序停止本轮剩余采集及投递，保留事件和通知触发记录，下一轮重试。程序尚未根据 GitHub `X-Poll-Interval` 动态调整周期，也未实现 Notifications 条件查询；打开事项较多时仍需结合账号限额增加 `poll_seconds`。
 
 已确认送达且有处理记录的历史正文默认保留 30 天，由 `history_retention_days` 调整。过期后保留去重标识和报告引用；未解决事件、当前快照和任务关联不按此期限删除。可用 `state/assistant/run cleanup --dry-run` 预览，详见[数据保留与清理](STORAGE.md#保存哪些数据)。
 
@@ -117,7 +129,7 @@ state/assistant/run pending
 
 检查以下结果后再判断助手可用：
 
-- `status` 中关注对象有新的 `last_success`，没有未解释的采集错误。
+- `status` 中仍打开的关注对象有新的 `last_success`，没有未解释的采集错误。已关闭或合并的事项停止定时轮询，`last_success` 不再定期更新。
 - 首次关注的 PR/Issue 出现一个带事件 ID 的未分配任务，后续变化追加到该任务的讨论区。`events` 中的 `accepted` 表示 Raft 接受了本次任务创建或追加消息；回执包含固定任务的频道、编号和根消息标识，追加消息另有 `notificationMessageId`。
 - 成功认领者通过 `verify-claim` 后能读取 `work-context`、给出有来源的判断，并用 `record-triage` 或 `record-work-result` 保存记录。处理后对应事件不再出现在 `pending`。
 
