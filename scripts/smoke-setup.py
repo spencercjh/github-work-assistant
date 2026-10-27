@@ -94,8 +94,9 @@ def main():
                     return self.reply(200, {"channel": {"ref": "#github-work", "type": "channel"},
                                             "agents": [{"name": "collector"}, {"name": "executor"}]})
                 if path == "/internal/agent-api/tasks":
+                    status_file = root / "task-status"
                     return self.reply(200, {"tasks": [{"taskNumber": 17, "messageId": "11111111-1111-1111-1111-111111111111",
-                                                      "claimedByName": task_owner, "status": task_status}]})
+                                                      "claimedByName": task_owner, "status": status_file.read_text() if status_file.exists() else task_status}]})
                 self.reply(404, {})
 
             def do_POST(self):
@@ -108,7 +109,9 @@ def main():
                     if self.path == "/internal/agent-api/send":
                         assert body["target"] == "#github-work:11111111"
                         assert body["idempotencyKey"].startswith("github-update:")
-                        assert "@executor" in body["content"] and "恢复为 in_progress" in body["content"]
+                        assert "@" + task_owner in body["content"]
+                        if (root / "task-status").exists() and (root / "task-status").read_text() == "done" and (root / "closed").exists():
+                            assert "原任务保持 Done" in body["content"]
                         assert body["continueAnyway"] is True
                         received.append(body)
                         return self.reply(200, {"ok": True, "state": "sent", "messageId": "22222222-2222-2222-2222-222222222222"})
@@ -160,6 +163,8 @@ elif p=='repos/example/fixture': data={'full_name':'example/fixture','private':F
 elif p=='repos/example/fixture/issues/1':
     data={'id':1,'number':1,'title':'fixture external prose @fixture-human','state':'open','body':'fixture issue body'}
     if (Path(__file__).resolve().parents[1]/'updated').exists(): data['title'] += ' updated'
+    if (Path(__file__).resolve().parents[1]/'closed').exists(): data['state'] = 'closed'
+    if (Path(__file__).resolve().parents[1]/'metadata').exists(): data['title'] += ' metadata'
 elif p in ('repos/example/fixture/issues/1/comments?per_page=100','repos/example/fixture/issues/1/timeline?per_page=100'):
     assert a[6:]==['--paginate','--slurp']
     data=[[]]
@@ -167,6 +172,23 @@ else: sys.exit('unexpected fixture endpoint')
 print(json.dumps(data))
 ''')
         gh.chmod(0o700)
+        # Exercise the actual subprocess boundary without a live Raft write.
+        # The fixture requires the caller's environment, not the sender token.
+        raft = root / "bin/raft"
+        raft.write_text('''#!/usr/bin/env python3
+import os,sys
+from pathlib import Path
+root=Path(__file__).resolve().parents[1]
+assert os.environ.get('RAFT_EXECUTOR_FIXTURE') == 'successor'
+a=sys.argv[1:]
+assert a[:7] == ['task','update','--target','#github-work','--number','17','--status']
+assert len(a)==8 and a[7] in ('done','in_review','in_progress')
+if (root/'unread-hold').exists(): sys.exit('Read the pending human message before retrying')
+(root/'task-status').write_text(a[7])
+with (root/'status-writes').open('a') as f: f.write(a[7]+'\\n')
+print('Task status updated')
+''')
+        raft.chmod(0o700)
         env = {k: v for k, v in os.environ.items() if not k.startswith("GHRAFT_")}
         env.update(PATH=str(root / "bin") + os.pathsep + os.environ["PATH"], SSL_CERT_FILE=str(root / "tls.crt"))
         with socket.socket() as port:
@@ -263,6 +285,47 @@ print(json.dumps(data))
                 assert run(newer_verify + ["--executor", "@successor"], parse=True)["execute"] is True
                 run(cli + ["deliver"])
                 assert len(received) == 2 and not run(cli + ["pending"], parse=True)
+
+                # A closed Issue finishes the existing task through the owner's
+                # CLI; an unread hold must not be treated as completed.
+                env["RAFT_EXECUTOR_FIXTURE"] = "successor"
+                (root / "closed").touch()
+                run(cli + ["collect"])
+                closed_event = run(cli + ["work-context", "--event", event], parse=True)["current_event_id"]
+                run(cli + ["deliver"])
+                context = run(cli + ["work-context", "--event", closed_event], parse=True)
+                def finish_args(context):
+                    return cli + ["finish-work", "--executor", "@successor", "--event", context["current_event_id"],
+                                  "--version", context["current_version"], "--guide", context["guide"]["version"],
+                                  "--task", context["discussion"]["messageId"]]
+                run(finish_args(context), fail=True)  # Delivery alone is insufficient.
+                assert not (root / "task-status").exists()
+                run(cli + ["record-triage", "--event", closed_event, "--executor", "@successor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
+                (root / "unread-hold").touch()
+                run(finish_args(context), fail=True)
+                assert not (root / "task-status").exists()
+                (root / "unread-hold").unlink()
+                assert run(finish_args(context), parse=True)["status"] == "done"
+                assert run(finish_args(context), parse=True)["status"] == "done"
+                assert (root / "status-writes").read_text().splitlines() == ["done"]
+
+                # Post-close metadata stays Done; reopening reuses that task.
+                (root / "metadata").touch()
+                run(cli + ["collect"])
+                run(cli + ["deliver"])
+                context = run(cli + ["work-context", "--event", event], parse=True)
+                run(cli + ["record-triage", "--event", context["current_event_id"], "--executor", "@successor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
+                assert (root / "task-status").read_text() == "done"
+                assert len(received) == 4 and all("target" in body for body in received[1:])
+                (root / "closed").unlink()
+                run(cli + ["collect"])
+                run(cli + ["deliver"])
+                assert "恢复为 in_progress" in received[-1]["content"]
+                (root / "task-status").write_text("in_progress")  # Owner reads and resumes.
+                context = run(cli + ["work-context", "--event", event], parse=True)
+                run(cli + ["record-triage", "--event", context["current_event_id"], "--executor", "@successor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
+                assert run(finish_args(context), parse=True)["status"] == "in_review"
+                assert not run(cli + ["pending"], parse=True)
 
             preview = run(cli + ["cleanup", "--dry-run"], parse=True)
             assert preview["dry_run"] and preview["history_retention_days"] == 30

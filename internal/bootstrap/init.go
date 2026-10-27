@@ -368,18 +368,24 @@ func executorGuide(root, notify, channel string) string {
 
     raft task claim --target %s --number <本任务编号>
 
-认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。原任务为 done 或 in_review 且出现未处理的新事件时，由原负责人先读取新消息，再将同一任务恢复为 in_progress；不要因已结束就丢弃新事件。closed 表示用户停止这项工作，必须等用户明确恢复。任务归人类或负责人不在频道时，等待人工交接，不代为认领。
+认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。原任务为 in_review 且出现新事件时，由原负责人先读取新消息，再将同一任务恢复为 in_progress。原任务为 done 时，先读 work-context：普通 PR/Issue 仍已结束且新增动态无需行动，直接 record-triage --outcome quiet，保持 Done；GitHub 重新打开、可信 work.requested 请求或确需行动时才恢复同一任务。closed 表示用户停止这项工作，必须等用户明确恢复。任务归人类或负责人不在频道时，等待人工交接，不代为认领。
 
 认领后以 raft auth whoami 确认自己的稳定名称，并运行：
 
     %s verify-claim --event <事件ID> --executor @你的名称
 
-只有 execute=true 才执行。execute=false 表示当前没有执行权限；先按上述规则处理归自己的 todo、done 或 in_review，再核验，仍不可执行时静默退出。投递回执尚未落库时等待本次投递确认，不另建任务。程序连接失败时不执行。该检查使用实时任务归属；--executor 不能填写别人的名称。所有 Agent 共享本机账号，这个参数用于检查协作流程，不提供系统用户隔离。
+只有 execute=true 才执行仓库工作。execute=false 表示当前没有执行权限；先按上述规则处理归自己的 todo、done 或 in_review，再核验，仍不可执行时静默退出。例外仅限原负责人记录 Done 后普通动态的 quiet 判断，以及使用 finish-work 核验收尾；两者都不授予仓库操作权限。投递回执尚未落库时等待本次投递确认，不另建任务。程序连接失败时不执行。该检查使用实时任务归属；--executor 不能填写别人的名称。所有 Agent 共享本机账号，这个参数用于检查协作流程，不提供系统用户隔离。
 
-record-triage、link-task、record-work-result、prepare-worktree、verify-worktree、test-worktree、restart-sync、check-github-action 都要带同一个 --executor；写入前会再次核对任务归属。向用户发送消息或修改仓库前也要重新 verify-claim。已经处理的事件不重复执行。work-context.discussion 是固定通知任务，work-context.task 是可选的工程任务。已有工程任务继续由其负责人处理；未取得原工程任务归属时只交接，不并行修改。旧事件的通知回执可能指向历史任务，执行归属以 discussion 和原任务当前状态为准。
+record-triage、link-task、record-work-result、prepare-worktree、verify-worktree、test-worktree、restart-sync、check-github-action、finish-work 都要带同一个 --executor；写入前会再次核对任务归属。向用户发送消息或修改仓库前也要重新 verify-claim。已经处理的事件不重复执行。work-context.discussion 是固定通知任务，work-context.task 是可选的工程任务。已有工程任务继续由其负责人处理；未取得原工程任务归属时只交接，不并行修改。旧事件的通知回执可能指向历史任务，执行归属以 discussion 和原任务当前状态为准。
 
-结束前读取原讨论区及 pending 中属于本事项的未处理事件，逐项保存判断；再把原任务更新为 in_review，按用户确认结束。负责人持续保留，后续变化仍在同一讨论区处理。只有用户明确要求才交接：先让原负责人停止，再由有权限的用户在原任务上 assign 给接手者。程序不会自动 unclaim、改派或重开 closed 任务；执行者也不得因完成、离线或超时自行交接。升级时需要 adopt-discussion 选择历史任务的操作由部署者明确决定，执行者不能自行选择。
-`, channel, shellQuote(channel), shellQuote(filepath.Join(root, "run")))
+结束前读取原讨论区及 pending 中属于本事项的未处理事件，逐项保存判断／报告，再用最新事件调用：
+
+    %s finish-work --event <最新事件ID> --executor @你的名称 --version <当前证据版本> --guide <当前指引版本> --task <discussion.messageId>
+
+finish-work 会刷新 GitHub 状态，核对全部事件已经送达并处理，再通过你当前身份的 raft CLI 更新原任务：普通 PR 已合并或关闭、Issue 已关闭时为 done，无需用户再次确认；仍打开或持续 fork 维护为 in_review。仅保存 waiting、needs-decision 或 changes-ready 不能完成已结束的事项，需先核实并保存最终判断。不要在命令成功后又手工改回 in_review；它只更新固定通知任务，不完成另行关联的工程任务。刷新发现新事件时先处理新事件；未读消息拦截时先阅读并遵守该消息，不绕过拦截。结果不确定时核对远端实际状态，再用相同参数重试。命令必须运行在原负责人的 Raft 环境中，不使用采集器身份替代。
+
+升级后，已结束且处理完毕但仍在 in_review 的事项会在原讨论收到一次收尾请求，按同样步骤完成。任务完成仍保留负责人。只有用户明确要求才交接：先让原负责人停止，再由有权限的用户在原任务上 assign 给接手者。程序不会自动 unclaim、改派或重开 closed 任务；执行者也不得因完成、离线或超时自行交接。升级时需要 adopt-discussion 选择历史任务的操作由部署者明确决定，执行者不能自行选择。
+`, channel, shellQuote(channel), shellQuote(filepath.Join(root, "run")), shellQuote(filepath.Join(root, "run")))
 	}
 	return fmt.Sprintf(`# GitHub 助手工作说明
 
