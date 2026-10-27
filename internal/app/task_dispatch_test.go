@@ -26,6 +26,10 @@ type taskAPI struct {
 	updates                                           map[string]string
 	updateWrites                                      int
 	lostUpdate, missingRoot, anchored                 bool
+	reportID, reportAuthor, reportKind, reportContent string
+	historyTarget                                     string
+	historyStatus, historyReads                       int
+	alternateHistoryFields                            bool
 }
 
 func (f *taskAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +52,34 @@ func (f *taskAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !f.missingMember {
 			agents = append(agents, map[string]string{"name": "collector"})
 		}
-		encode(map[string]any{"channel": map[string]string{"ref": "#github-work", "type": "channel"}, "agents": agents})
+		encode(map[string]any{"channel": map[string]string{"ref": "#github-work", "type": "channel"}, "agents": agents, "humans": []map[string]string{{"name": "owner"}}})
+	case r.URL.Path == "/internal/agent-api/history":
+		f.historyReads++
+		wantTarget := "#github-work:" + fixtureTask[:8]
+		if f.anchored {
+			wantTarget = "#github-work:#17"
+		}
+		if r.URL.Query().Get("consume") != "false" || r.URL.Query().Get("around") != fixtureReport || r.URL.Query().Get("channel") != wantTarget {
+			w.WriteHeader(400)
+			return
+		}
+		if f.historyStatus != 0 {
+			w.WriteHeader(f.historyStatus)
+			return
+		}
+		target := f.historyTarget
+		if target == "" {
+			target = r.URL.Query().Get("channel")
+		}
+		messages := []map[string]string{}
+		if f.reportID != "" {
+			message := map[string]string{"id": f.reportID, "senderName": f.reportAuthor, "senderType": f.reportKind, "content": f.reportContent}
+			if f.alternateHistoryFields {
+				message = map[string]string{"message_id": f.reportID, "sender_name": f.reportAuthor, "sender_type": f.reportKind, "content": f.reportContent}
+			}
+			messages = append(messages, message)
+		}
+		encode(map[string]any{"target": target, "messages": messages})
 	case r.URL.Path == "/internal/agent-api/tasks" && r.Method == "POST":
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)

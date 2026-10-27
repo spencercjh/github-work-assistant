@@ -87,6 +87,8 @@ bin/ghraft -config config.json record-work-result \
 
 结果可为 `investigated`、`changes-ready`、`needs-decision`、`waiting` 或 `merged`。`waiting` 记录等待条件，后续事件继续由原负责人处理。`merged` 要求配置已委托 `merge`，且刷新后的 PR 快照确认 `merged=true`；它不能表示只是已请求自动合入。只读仓库不能记录 `changes-ready`。结果是 Agent 对证据和验证的上报；App 不声称独立执行了报告中的测试。已有任务关联的资源必须使用这个带版本的接口，旧 `record-result` 不能绕过检查。重复上报同一内容是幂等操作，改写已记录的报告会冲突。
 
+`needs-decision` 要求先在原讨论向 `guide.decision_maker` 提出具体问题，并以此人的裸提及开头。使用实际发送成功的消息 UUID；共享模式会核验原讨论中的消息和发送者。仅等待 CI 使用 `waiting`，同一未决问题复用已有请求。具体格式及发送失败处理见[决策请求](AGENT-WORKFLOW.md#需要用户决策时)。
+
 任务状态继续在 Raft 中更新。需要未来复查时，由负责 Agent 创建锚定原任务的 Raft reminder；交接时同步提醒责任。仓库指引可持续授权 GitHub 动作；执行前核对当前授权、归属和远端版本。程序不代理远端写入，由执行者使用 `gh` 完成并查询实际结果。配置文件变更后重启服务；本机 CLI 每次读取最新配置，指引正文每次工作操作重新读取。
 
 ## 检查持续授权并合入

@@ -43,7 +43,7 @@ make setup
 make build
 bin/ghraft init --dir state/my-assistant \
   --raft-token-file /private/path/external-token \
-  --task-channel '#github-work' --notify @owner --database sqlite
+  --task-channel '#github-work' --decision-maker @owner --database sqlite
 
 state/my-assistant/run migrate
 state/my-assistant/run doctor
@@ -51,7 +51,11 @@ state/my-assistant/run doctor
 
 需要独立 MySQL 容器时，将 `--database sqlite` 改为 `--database mysql --db-port 13307`，并在 `migrate` 前执行 `docker compose -f state/my-assistant/database.yml up -d --wait`。已有数据库使用 `--database postgres --dsn-file /private/path/database-dsn` 等组合，程序不会创建数据库服务。
 
-`--notify` 可省略。`--watch 'owner/repo#123,owner/other#456'` 可增加固定关注对象。`--raft-api` 仅用于指定其他 Raft HTTPS API 入口；程序拒绝重定向。不要把 token 放在命令参数、环境变量值或聊天中。
+`--decision-maker` 必填，使用需要做决策的人的 Raft 稳定名称，例如 `@owner`，不能用 GitHub 登录名代替。共享模式会检查此人已加入工作频道。执行者只在需要决策时于原讨论提及此人；此配置不启用私聊。需要额外私聊时才添加可选的 `--notify @owner`。
+
+`--watch 'owner/repo#123,owner/other#456'` 可增加固定关注对象。`--raft-api` 仅用于指定其他 Raft HTTPS API 入口；程序拒绝重定向。不要把 token 放在命令参数、环境变量值或聊天中。
+
+已有实例升级时，在 `config.json` 增加 `"decision_maker": "@owner"`，核对工作频道中的人类成员，更新 `EXECUTOR.md` 中的[决策请求规则](AGENT-WORKFLOW.md#需要用户决策时)，再执行 `run check-config`、`run doctor` 并重启服务。让执行者重新读取说明。决策人变化会更新指引版本；正在工作的执行者需要重新读取 `work-context` 并关联当前版本。未配置决策人的旧实例仍可采集，但共享任务不能记录 `needs-decision`。
 
 `init` 只生成配置，不覆盖已有目录。`migrate` 创建 SQLite 文件或初始化已选数据库的表；`doctor` 不创建缺失数据库。若初始化失败，修复路径或连接后重试 `migrate`、`doctor`。新建 MySQL 容器失败时，先重试 Compose 启动步骤，无需重新生成身份和密码。
 
@@ -70,10 +74,12 @@ state/my-assistant/run doctor
 
 ## 配置任务频道与关注范围
 
-把 `state/assistant/EXECUTOR.md` 的绝对路径交给频道中的执行 Agent，明确委托它们处理通知及允许的操作范围。配置只保存频道：
+把 `state/assistant/EXECUTOR.md` 的绝对路径交给频道中的执行 Agent，明确委托它们处理通知及允许的操作范围。配置保存工作频道和需要做决策的人：
 
 ```json
-"delivery_target": "#github-work"
+"delivery_target": "#github-work",
+"decision_maker": "@owner",
+"notify_target": ""
 ```
 
 每个 PR/Issue 首次创建一个未分配任务，频道里的 Agent 竞争认领。后续事件追加到同一个讨论区并提醒当前负责人；任务完成不会解除归属。Raft 保证同一任务只有一个负责人；成功者持续处理，已被别人认领者静默结束，不重试争抢、不另建任务、不向用户报错。网络或权限错误需要排查，不能当成正常落选。完整操作见[执行工作流](AGENT-WORKFLOW.md#竞争认领共享任务)。
