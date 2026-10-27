@@ -7,9 +7,19 @@ import (
 	"time"
 )
 
-func requireForkWork(w WorkContext, in WorkInput) error {
+func requireForkContext(w WorkContext, in WorkInput) error {
 	if w.Fork == nil || !idRE.MatchString(w.Fork.Round) || w.Fork.Phase == "synced" || w.Fork.Phase == "restart" || forkFacts(w)["round"] != w.Fork.Round || w.Guide.Mode != "local-edit" || w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.EvidenceVersion != in.EvidenceVersion || w.Task.GuideVersion != in.GuideVersion {
 		return ErrWorkDenied
+	}
+	return nil
+}
+
+func requireForkWork(w WorkContext, in WorkInput) error {
+	if err := requireForkContext(w, in); err != nil {
+		return err
+	}
+	if w.Fork.SyncMode != w.Guide.ForkSyncMode {
+		return errors.New("sync mode changed; select an authorized batch before modifying work")
 	}
 	return nil
 }
@@ -28,7 +38,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 		return result, ErrStaleWork
 	}
 	if in.Action == "push" || in.Action == "open-pr" || in.Action == "merge" {
-		if p.ValidatedHead != in.Head || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != in.Base || p.ValidatedHead != p.Upstream || !shaRE.MatchString(p.ValidatedTree) {
+		if p.ValidatedHead != in.Head || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != in.Base || !validForkProofHead(*p) || !shaRE.MatchString(p.ValidatedTree) {
 			return result, errors.New("run test-worktree for this commit, target and guide before writing")
 		}
 		local, err := s.verifyForkWorkspace(ctx, w, in.WorkInput)
@@ -84,7 +94,11 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 }
 
 func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkResult) error {
-	if err := requireForkWork(w, in.WorkInput); err != nil {
+	check := requireForkContext
+	if in.Outcome == "merged" || in.Outcome == "changes-ready" {
+		check = requireForkWork
+	}
+	if err := check(w, in.WorkInput); err != nil {
 		return err
 	}
 	p := *w.Fork
@@ -96,12 +110,12 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 	switch in.Outcome {
 	case "merged":
 		pull, facts := snapshot.Objects["pull"], forkFacts(w)
-		if pull["merged"] != true || p.ValidatedHead != p.Upstream || !shaRE.MatchString(p.ValidatedTree) || pull["head"] != p.ValidatedHead || p.ValidatedGuide != in.GuideVersion || facts["contains_pinned"] != true || facts["contains_validated"] != true || facts["merge_verified"] != true {
-			return errors.New("sync completion requires the tested commit and pinned upstream in the remote target, plus refreshed merged PR evidence")
+		if pull["merged"] != true || !validForkProofHead(p) || !shaRE.MatchString(p.ValidatedTree) || pull["head"] != p.ValidatedHead || p.ValidatedGuide != in.GuideVersion || (p.SyncMode != adaptedBatches && facts["contains_pinned"] != true) || facts["contains_validated"] != true || facts["merge_verified"] != true {
+			return errors.New("sync completion requires the tested head and merge tree in the remote target, plus refreshed merged PR evidence")
 		}
 		p.LastSuccess, p.Phase, p.NextAttempt = p.Upstream, "synced", 0
 	case "changes-ready":
-		if p.ValidatedHead != p.Upstream || !shaRE.MatchString(p.ValidatedTree) || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != str(forkFacts(w)["target_sha"]) {
+		if !validForkProofHead(p) || !shaRE.MatchString(p.ValidatedTree) || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != str(forkFacts(w)["target_sha"]) {
 			return errors.New("changes-ready requires current fork regression evidence")
 		}
 		p.Phase, p.NextAttempt = "waiting", time.Now().Add(time.Hour).Unix()
@@ -129,7 +143,7 @@ func (s *Service) RestartFork(ctx context.Context, in WorkInput) (ForkProgress, 
 	var snapshot Snapshot
 	_ = json.Unmarshal(w.Snapshot, &snapshot)
 	pull := snapshot.Objects["pull"]
-	legacyMerged := pull["merged"] == true && shaRE.MatchString(str(pull["head"])) && pull["head"] != w.Fork.Upstream && forkFacts(w)["contains_pinned"] == true
+	legacyMerged := w.Fork.SyncMode == "" && pull["merged"] == true && shaRE.MatchString(str(pull["head"])) && pull["head"] != w.Fork.Upstream && forkFacts(w)["contains_pinned"] == true
 	if pull["state"] != "closed" || (pull["merged"] != false && !legacyMerged) {
 		return ForkProgress{}, errors.New("restart requires a closed unmerged PR or explicit retirement of a merged legacy integration head already containing pinned upstream")
 	}

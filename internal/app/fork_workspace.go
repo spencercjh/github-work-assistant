@@ -25,10 +25,17 @@ func workspaceLock(metadata string) (*os.File, error) {
 }
 
 // Use a separate workspace identity so an upgrade never rewrites an existing
-// integration branch or its uncommitted work. The source stays detached at the
-// exact pinned upstream commit; Branch names only the permitted remote ref.
+// integration branch or its uncommitted work. Each selected batch gets a new
+// round identity; existing source worktrees and their edits are never reset.
 func (s *Service) forkWorkspacePaths(round string) (string, string, error) {
 	return s.workspacePaths(hash([]byte(round + ":upstream-only")))
+}
+
+func forkSourceBase(p *ForkProgress) string {
+	if p.SyncMode == adaptedBatches {
+		return p.InitialTarget
+	}
+	return p.Upstream
 }
 
 func (s *Service) prepareForkWorkspace(ctx context.Context, w WorkContext, in WorkInput, repository string) (Workspace, error) {
@@ -62,10 +69,10 @@ func (s *Service) prepareForkWorkspace(ctx context.Context, w WorkContext, in Wo
 			return Workspace{}, errors.New("fetch the pinned upstream and current target commits into the local clone first")
 		}
 	}
-	workspace := Workspace{WorkInput: in, Resource: w.Event.Key, Repository: repository, Path: path, Branch: p.Branch, Head: p.Upstream, Base: p.InitialTarget, TestCommands: w.Guide.TestCommands}
+	workspace := Workspace{WorkInput: in, Resource: w.Event.Key, Repository: repository, Path: path, Branch: p.Branch, Head: forkSourceBase(p), Base: p.InitialTarget, TestCommands: w.Guide.TestCommands}
 	if b, err := os.ReadFile(metadata); err == nil {
 		var saved Workspace
-		if json.Unmarshal(b, &saved) != nil || saved.Repository != repository || saved.Resource != w.Event.Key || saved.Path != path || saved.Branch != p.Branch || saved.Head != p.Upstream || saved.Base != p.InitialTarget {
+		if json.Unmarshal(b, &saved) != nil || saved.Repository != repository || saved.Resource != w.Event.Key || saved.Path != path || saved.Branch != p.Branch || saved.Head != forkSourceBase(p) || saved.Base != p.InitialTarget {
 			return Workspace{}, errors.New("workspace metadata differs from this sync round")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
@@ -88,7 +95,11 @@ func (s *Service) prepareForkWorkspace(ctx context.Context, w WorkContext, in Wo
 		return Workspace{}, err
 	}
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		if _, err = gitLocal(ctx, repository, "worktree", "add", "--detach", path, p.Upstream); err != nil {
+		args := []string{"worktree", "add", "--detach", path, p.Upstream}
+		if p.SyncMode == adaptedBatches {
+			args = []string{"worktree", "add", "-b", p.Branch, path, p.InitialTarget}
+		}
+		if _, err = gitLocal(ctx, repository, args...); err != nil {
 			return Workspace{}, err
 		}
 	} else if err != nil {
@@ -111,7 +122,7 @@ func (s *Service) verifyForkWorkspace(ctx context.Context, w WorkContext, in Wor
 		return Workspace{}, err
 	}
 	var workspace Workspace
-	if json.Unmarshal(data, &workspace) != nil || workspace.Path != path || workspace.Resource != w.Event.Key || workspace.Branch != p.Branch || workspace.Head != p.Upstream || workspace.Base != p.InitialTarget {
+	if json.Unmarshal(data, &workspace) != nil || workspace.Path != path || workspace.Resource != w.Event.Key || workspace.Branch != p.Branch || workspace.Head != forkSourceBase(p) || workspace.Base != p.InitialTarget {
 		return workspace, errors.New("workspace belongs to another sync round")
 	}
 	actual, err := filepath.EvalSymlinks(path)
@@ -124,19 +135,42 @@ func (s *Service) verifyForkWorkspace(ctx context.Context, w WorkContext, in Wor
 		return workspace, errors.New("workspace origin changed")
 	}
 	branch, err := gitLocal(ctx, path, "branch", "--show-current")
-	if err != nil || branch != "" {
-		return workspace, errors.New("source worktree must stay detached at pinned upstream")
+	wantBranch := ""
+	if p.SyncMode == adaptedBatches {
+		wantBranch = p.Branch
+	}
+	if err != nil || branch != wantBranch {
+		return workspace, errors.New("source worktree branch differs from the sync round")
 	}
 	head, err := gitLocal(ctx, path, "rev-parse", "HEAD")
-	if err != nil || head != p.Upstream {
+	if err != nil || !shaRE.MatchString(head) {
+		return workspace, errors.New("source worktree has no valid commit")
+	}
+	if p.SyncMode == adaptedBatches {
+		localSpec := f
+		localSpec.LocalRepository = workspace.Repository
+		repo, err := openForkGitRepository(ctx, localSpec)
+		if err != nil {
+			return workspace, err
+		}
+		contains, err := repo.contains(ctx, p.InitialTarget, head)
+		repo.close()
+		if err != nil || !contains {
+			return workspace, errors.New("adapted source must retain its initial target history")
+		}
+	} else if head != p.Upstream {
 		return workspace, errors.New("source worktree must contain the exact pinned upstream commit without integration commits")
 	}
+	workspace.Head = head
 	if err = cleanCommitted(ctx, path); err != nil {
 		return workspace, err
 	}
 	workspace.WorkInput, workspace.Base, workspace.TestCommands = in, str(forkFacts(w)["target_sha"]), w.Guide.TestCommands
 	workspace.Conflicts = []string{}
 	workspace.Verification = "Source is the exact pinned upstream commit. test-worktree validates a separate temporary merge with the current target; push only this source HEAD to the returned branch."
+	if p.SyncMode == adaptedBatches {
+		workspace.Verification = "Adapted source retains the initial target. Port only the listed batch and document custom adaptations; test-worktree validates this actual HEAD merged with the current target before writing the returned branch."
+	}
 	return workspace, nil
 }
 
@@ -161,7 +195,7 @@ func (s *Service) forkTestWorktree(ctx context.Context, source Workspace) (strin
 	}
 	if _, err = gitLocal(ctx, path, "merge", "--no-commit", "--no-ff", source.Head); err != nil {
 		cleanup()
-		return "", nil, errors.New("upstream cannot merge cleanly with the current target; request a decision instead of modifying the sync source")
+		return "", nil, errors.New("sync source cannot merge cleanly with the current target; follow the configured synchronization mode to resolve it")
 	}
 	return path, cleanup, nil
 }
@@ -230,6 +264,9 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	if err = cleanCommitted(ctx, workspace.Path); err != nil {
 		return result, err
 	}
+	if w.Fork.SyncMode == adaptedBatches && workspace.Head == w.Fork.InitialTarget {
+		return result, errors.New("adapt and commit this batch before validation")
+	}
 	if len(w.Guide.TestCommands) == 0 {
 		return result, errors.New("no regression commands configured")
 	}
@@ -262,7 +299,7 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	testCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	var output limitedBuffer
-	fmt.Fprintf(&output, "upstream: %s\ntarget: %s\nmerge tree: %s\n", result.Head, result.Base, result.Tree)
+	fmt.Fprintf(&output, "source: %s\ntarget: %s\nmerge tree: %s\n", result.Head, result.Base, result.Tree)
 	for _, argv := range w.Guide.TestCommands {
 		fmt.Fprintf(&output, "command: %s\n", string(canonical(argv)))
 		cmd := exec.CommandContext(testCtx, argv[0], argv[1:]...)
@@ -288,8 +325,8 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	if tree, err := forkTestTree(ctx, testPath, result.Base); err != nil || tree != result.Tree {
 		return result, errors.New("tests changed the merge result")
 	}
-	if _, err = s.verifyForkWorkspace(ctx, w, in); err != nil {
-		return result, err
+	if source, err := s.verifyForkWorkspace(ctx, w, in); err != nil || source.Head != result.Head {
+		return result, errors.New("source changed during tests")
 	}
 	// Tests may outlive the evidence freshness window. Collect again, then
 	// reject changed inputs or ownership before saving the tested revisions.

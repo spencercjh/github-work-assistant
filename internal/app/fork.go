@@ -73,6 +73,9 @@ func (c Config) validateForks() error {
 		if err != nil {
 			return err
 		}
+		if g.ForkSyncMode == adaptedBatches && f.LocalRepository == "" {
+			return errors.New("adapted batches require a complete local_repository")
+		}
 		if g.Mode != "local-edit" || len(g.TestCommands) == 0 {
 			return errors.New("fork maintenance requires an explicit local-edit target policy and regression commands")
 		}
@@ -83,26 +86,31 @@ func (c Config) validateForks() error {
 // Only progress needed to recover is persisted. Source and review bodies remain
 // in the current snapshot, while old reports follow ordinary retention rules.
 type ForkProgress struct {
-	PrivateRepos     []string `json:"private_repositories,omitempty"`
-	Revision         int64    `json:"revision"`
-	SpecVersion      string   `json:"spec_version"`
-	Round            string   `json:"round"`
-	Phase            string   `json:"phase"`
-	Upstream         string   `json:"upstream_sha"`
-	InitialTarget    string   `json:"initial_target_sha"`
-	ObservedUpstream string   `json:"observed_upstream_sha"`
-	Branch           string   `json:"sync_branch"`
-	PR               int      `json:"pr"`
-	LastSuccess      string   `json:"last_success_upstream_sha"`
-	ValidatedHead    string   `json:"validated_head"`
-	ValidatedBase    string   `json:"validated_base"`
-	ValidatedTree    string   `json:"validated_tree"`
-	ValidatedGuide   string   `json:"validated_guide"`
-	TestLog          string   `json:"test_log,omitempty"`
-	TestLogHash      string   `json:"test_log_hash,omitempty"`
-	NextAttempt      int64    `json:"next_attempt"`
-	Retries          int      `json:"retries"`
-	Wake             int      `json:"wake"`
+	AdaptationBaseline string   `json:"adaptation_baseline,omitempty"`
+	SyncMode           string   `json:"sync_mode,omitempty"`
+	BatchAfter         string   `json:"batch_after,omitempty"`
+	BatchCommits       []string `json:"batch_commits,omitempty"`
+	BatchReason        string   `json:"batch_reason,omitempty"`
+	PrivateRepos       []string `json:"private_repositories,omitempty"`
+	Revision           int64    `json:"revision"`
+	SpecVersion        string   `json:"spec_version"`
+	Round              string   `json:"round"`
+	Phase              string   `json:"phase"`
+	Upstream           string   `json:"upstream_sha"`
+	InitialTarget      string   `json:"initial_target_sha"`
+	ObservedUpstream   string   `json:"observed_upstream_sha"`
+	Branch             string   `json:"sync_branch"`
+	PR                 int      `json:"pr"`
+	LastSuccess        string   `json:"last_success_upstream_sha"`
+	ValidatedHead      string   `json:"validated_head"`
+	ValidatedBase      string   `json:"validated_base"`
+	ValidatedTree      string   `json:"validated_tree"`
+	ValidatedGuide     string   `json:"validated_guide"`
+	TestLog            string   `json:"test_log,omitempty"`
+	TestLogHash        string   `json:"test_log_hash,omitempty"`
+	NextAttempt        int64    `json:"next_attempt"`
+	Retries            int      `json:"retries"`
+	Wake               int      `json:"wake"`
 }
 
 type ForkObservation struct {
@@ -151,7 +159,12 @@ func (d WorkDefinition) Repository() string {
 func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
 	g, err := c.RepositoryGuide(d.Repository())
 	if err == nil && d.Fork != nil {
-		g.Text += "\n\nKeep the sync PR head exactly equal to the pinned upstream commit; do not add integration commits or edits. Test its temporary merge with the current target to preserve custom behavior. Conflicts or failed regressions require a decision. Merge using a merge commit only when authorized, and verify the resulting tree against the tested merge tree. Upstream is read-only. Push only the current round's sync branch; merge only its PR into the configured target. No force pushes except an exact operator sync_branch_replacement grant checked against the expected remote head.\nTrusted maintenance rule: " + string(canonical(d.Fork))
+		if g.ForkSyncMode == adaptedBatches {
+			g.Text += "\n\nUse start-sync-batch to select the oldest next first-parent upstream commits after the documented baseline or verified completed batch. Prepare a separate branch from the target, port only the listed changes and preserve custom behavior. Record adaptations and already-present changes for human review; ancestry does not prove ported semantics. Test the actual adapted head merged with the current target. No upstream writes or direct target pushes; only the current sync branch and its PR. Merge requires separate delegation and a merge commit whose parents and tree match the test proof."
+			g.Text += "\nTrusted maintenance rule: " + string(canonical(d.Fork))
+		} else {
+			g.Text += "\n\nKeep the sync PR head exactly equal to the pinned upstream commit; do not add integration commits or edits. Test its temporary merge with the current target to preserve custom behavior. Conflicts or failed regressions require a decision. Merge using a merge commit only when authorized, and verify the resulting tree against the tested merge tree. Upstream is read-only. Push only the current round's sync branch; merge only its PR into the configured target. No force pushes except an exact operator sync_branch_replacement grant checked against the expected remote head.\nTrusted maintenance rule: " + string(canonical(d.Fork))
+		}
 		g.Version = ""
 		g.Version = hash(canonical(g))
 	}
@@ -199,6 +212,11 @@ func planFork(spec ForkSpec, p ForkProgress, o ForkObservation, now int64) ForkP
 	}
 	p.SpecVersion = spec.Version()
 	p.ObservedUpstream = o.Upstream
+	// Adapted rounds are explicitly selected from the verified cursor. Never
+	// fall back to merging the latest upstream after finishing a batch.
+	if p.SyncMode == adaptedBatches && (p.Phase == "synced" || p.Phase == "restart") {
+		return p
+	}
 	if p.Round == "" || p.Phase == "synced" || p.Phase == "restart" {
 		if !o.ContainsLatest {
 			last, private := p.LastSuccess, p.PrivateRepos
@@ -231,6 +249,13 @@ func forkSnapshot(spec ForkSpec, p ForkProgress, o ForkObservation) []byte {
 		objects = Objects{}
 	}
 	objects["fork"] = map[string]any{"id": spec.ID, "upstream_repo": spec.Upstream.Repo, "upstream_branch": spec.Upstream.Branch, "target_repo": spec.Target.Repo, "target_branch": spec.Target.Branch, "round": p.Round, "upstream_sha": p.Upstream, "initial_target_sha": p.InitialTarget, "target_sha": o.Target, "sync_branch": p.Branch, "pr": p.PR, "remote_head": o.SyncHead, "contains_pinned": o.ContainsPinned, "contains_validated": o.ContainsValidated, "merge_verified": o.MergeVerified, "merge_commit_sha": o.MergeCommit, "wake": p.Wake}
+	if p.SyncMode == adaptedBatches {
+		facts := objects["fork"]
+		facts["sync_mode"], facts["batch_after"], facts["batch_commits"], facts["batch_reason"] = p.SyncMode, p.BatchAfter, p.BatchCommits, p.BatchReason
+		facts["observed_upstream_sha"] = o.Upstream
+		facts["adaptation_baseline"] = p.AdaptationBaseline
+		facts["next_batch_ready"] = p.Phase == "synced" && p.Upstream != o.Upstream
+	}
 	return canonical(Snapshot{spec.Key(), o.Classification, objects})
 }
 
@@ -307,6 +332,10 @@ func (r *Raft) forkNotice(ev Event, f ForkSpec) (eventNotice, error) {
 	for _, c := range p.Changes {
 		if c.Object == "fork" && c.After != nil {
 			a := obj(c.After)
+			if a["sync_mode"] == adaptedBatches {
+				commits, _ := a["batch_commits"].([]any)
+				lines = append(lines, fmt.Sprintf("本批按上游主线顺序移植 %d 项变更。", len(commits)))
+			}
 			if sha := str(a["upstream_sha"]); shaRE.MatchString(sha) {
 				lines = append(lines, "本轮整合上游提交：`"+sha[:12]+"`")
 			}

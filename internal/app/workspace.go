@@ -26,7 +26,7 @@ type Workspace struct {
 
 func gitLocal(ctx context.Context, directory string, args ...string) (string, error) {
 	// These operations are local and never create commits or push. Disable hooks for merge/worktree setup.
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.hooksPath=/dev/null", "-C", directory}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", directory}, args...)...)
 	var stdout, stderr limitedBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
