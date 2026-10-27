@@ -321,7 +321,7 @@ func TestWorkActionsAndRevocation(t *testing.T) {
 	if err = svc.Collect(ctx); err == nil {
 		t.Fatal("private visibility was not reported")
 	}
-	if svc.allowed(ctx, event.Key) {
+	if svc.checkAccess(ctx, event.Key) == nil {
 		t.Fatal("private repository retains access to historical context")
 	}
 	if code := request("get-work-context", map[string]string{"event_id": event.ID}, true); code != 403 {

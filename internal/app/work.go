@@ -80,8 +80,8 @@ func (s *Service) WorkContext(ctx context.Context, id string) (WorkContext, erro
 	if err != nil {
 		return w, err
 	}
-	if !s.allowed(ctx, w.Event.Key) {
-		return WorkContext{}, ErrWorkDenied
+	if err := s.checkAccess(ctx, w.Event.Key); err != nil {
+		return WorkContext{}, err
 	}
 	definition, err := s.Config.WorkDefinition(w.Event.Key)
 	if err != nil {
@@ -284,6 +284,8 @@ func (s *Service) registerWorkActions(m *http.ServeMux) {
 }
 func workError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrGitHubRateLimited):
+		fail(w, 503, "GITHUB_RATE_LIMITED")
 	case errors.Is(err, ErrWorkDenied):
 		fail(w, 403, "WORK_NOT_ALLOWED")
 	case errors.Is(err, ErrStaleWork):

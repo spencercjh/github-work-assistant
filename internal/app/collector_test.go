@@ -25,7 +25,8 @@ with open(os.environ['GHRAFT_FIXTURE']) as f: data=json.load(f)
 p=a[5]
 if p not in data: sys.exit('unconfigured fixture endpoint')
 if isinstance(data[p],dict) and '_http_status' in data[p]:
-    sys.exit('gh: simulated access failure (HTTP %d)' % data[p]['_http_status'])
+    if '_body' in data[p]: print(json.dumps(data[p]['_body']))
+    sys.exit('gh: %s (HTTP %d)' % (data[p].get('_http_message','simulated access failure'), data[p]['_http_status']))
 print(json.dumps(data[p]))
 `
 	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {

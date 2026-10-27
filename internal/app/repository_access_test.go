@@ -135,6 +135,44 @@ func TestPrivateHistoryAccessAndTaskDelivery(t *testing.T) {
 		t.Fatal("events CLI bypasses scope", err)
 	}
 	svc.Config.PrivateRepositories = g.PrivateRepositories
+	// Limits must preserve queued work and scope, while withholding private
+	// context until GitHub can verify access again. Exercise gh's real exit path.
+	for _, response := range []map[string]any{
+		{"_http_status": 403, "_http_message": "API rate limit exceeded for 192.0.2.1"},
+		{"_http_status": 403, "_body": map[string]any{"message": "You have exceeded a secondary rate limit."}},
+		{"_http_status": 429},
+	} {
+		data["repos/example/fixture"] = response
+		writeFixture(t, fixture, data)
+		if err := svc.collectWatch(ctx, cfg.Watches[0]); !errors.Is(err, ErrGitHubRateLimited) {
+			t.Fatal("rate limit classified as access loss", err)
+		}
+		if blocked, err := store.WatchBlocked(ctx, event.Key); err != nil || blocked {
+			t.Fatal("rate limit persisted a revoked scope", blocked, err)
+		}
+		if w, err := svc.WorkContext(ctx, event.ID); !errors.Is(err, ErrGitHubRateLimited) || len(w.Snapshot) != 0 {
+			t.Fatal("rate limit not surfaced or cached private context exposed", err)
+		}
+		if rows, err := svc.Pending(ctx); !errors.Is(err, ErrGitHubRateLimited) || rows != nil {
+			t.Fatal("unavailable pending list reported as empty success", rows, err)
+		}
+		if rows, err := svc.Events(ctx); !errors.Is(err, ErrGitHubRateLimited) || rows != nil {
+			t.Fatal("unavailable event list reported as empty success", err)
+		}
+		if err := svc.Deliver(ctx); !errors.Is(err, ErrGitHubRateLimited) || f.writes != 0 {
+			t.Fatal("temporary delivery failure was hidden or event sent", err)
+		}
+		recorder := httptest.NewRecorder()
+		if svc.checkHTTPAccess(recorder, httptest.NewRequest("GET", "/", nil), event.Key) || recorder.Code != 503 || !strings.Contains(recorder.Body.String(), "GITHUB_RATE_LIMITED") {
+			t.Fatal("HTTP context reports a limit as authorization loss", recorder.Code, recorder.Body.String())
+		}
+		// Restart the persistence connection while still limited: no work was lost.
+		reopened := openTestStore(t)
+		queued, err := reopened.Events(ctx, true)
+		if err != nil || len(queued) != 1 || queued[0].ID != event.ID {
+			t.Fatal("rate limit consumed queued work", queued, err)
+		}
+	}
 	// Real gh exit paths must revoke cached reads and pending sends for lost access.
 	for _, status := range []int{401, 403, 404} {
 		data["repos/example/fixture"] = map[string]any{"_http_status": status}

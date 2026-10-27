@@ -234,32 +234,41 @@ func forkFacts(w WorkContext) map[string]any {
 	return snap.Objects["fork"]
 }
 
-func (s *Service) forkAllowed(ctx context.Context, f ForkSpec) bool {
+func (s *Service) checkForkAccess(ctx context.Context, f ForkSpec) error {
 	p, err := s.Store.ForkProgress(ctx, f.Key())
-	if err != nil || (p.SpecVersion != "" && p.SpecVersion != f.Version()) {
-		return false
+	if err != nil {
+		return err
+	}
+	if p.SpecVersion != "" && p.SpecVersion != f.Version() {
+		return ErrWorkDenied
 	}
 	blocked, err := s.Store.WatchBlocked(ctx, f.Key())
-	if err != nil && !errors.Is(err, ErrNotFound) || blocked {
-		return false
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if blocked {
+		return ErrWorkDenied
 	}
 	for _, repo := range p.PrivateRepos {
 		if !privateRepositoryAllowed(s.Config.PrivateRepositories, repo) {
-			return false
+			return ErrWorkDenied
 		}
 	}
 	g, ok := s.GH.(interface {
 		RepositoryClassification(context.Context, string) (string, error)
 	})
-	if !ok || s.GH.CheckIdentity(ctx) != nil {
-		return false
+	if !ok {
+		return ErrWorkDenied
+	}
+	if err := s.GH.CheckIdentity(ctx); err != nil {
+		return sourceAccessError(err)
 	}
 	for _, repo := range []string{f.Upstream.Repo, f.Target.Repo} {
 		if _, err := g.RepositoryClassification(ctx, repo); err != nil {
-			return false
+			return sourceAccessError(err)
 		}
 	}
-	return true
+	return nil
 }
 
 func (c Config) managedPR(w Watch, snapshot Snapshot) bool {

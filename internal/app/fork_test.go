@@ -21,10 +21,14 @@ type forkFixtureSource struct {
 	pr                                                              int
 	closed, merged, private, denied                                 bool
 	checks                                                          string
+	accessErr                                                       error
 }
 
 func (g *forkFixtureSource) CheckIdentity(context.Context) error { return nil }
 func (g *forkFixtureSource) RepositoryClassification(_ context.Context, _ string) (string, error) {
+	if g.accessErr != nil {
+		return "", g.accessErr
+	}
 	if g.denied {
 		return "", ErrRepositoryNotAllowed
 	}
@@ -222,7 +226,7 @@ func TestForkMaintenanceE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	in, work = currentForkInput(t, s)
-	if work.Fork.PR != 1 || s.allowed(ctx, "example/fixture#1") {
+	if work.Fork.PR != 1 || s.checkAccess(ctx, "example/fixture#1") == nil {
 		t.Fatal("generated PR acquired independent work")
 	}
 	// A newer upstream commit is coalesced without changing the active round.

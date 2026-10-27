@@ -13,6 +13,7 @@ import (
 var shaRE = regexp.MustCompile(`^[a-f0-9]{40}$`)
 var ErrRepositoryNotAllowed = errors.New("repository visibility is unknown or outside configured scope")
 var ErrGitHubAccessDenied = errors.New("GitHub access denied; check authentication and repository permissions")
+var ErrGitHubRateLimited = errors.New("GitHub API rate limit exceeded; retry after the limit resets")
 
 type GitHub interface {
 	CheckIdentity(context.Context) error
@@ -39,6 +40,22 @@ func (g GH) api(ctx context.Context, path string, pages bool) (json.RawMessage, 
 	var stderr limitedBuffer
 	cmd.Stderr = &stderr
 	if e := cmd.Run(); e != nil {
+		// gh reports rate limits as HTTP 403 as well as 429. A temporary limit
+		// must not persist a revoked-access marker or expose raw response data.
+		message := strings.ToLower(stderr.String())
+		if strings.Contains(message, "(http 429)") {
+			return nil, ErrGitHubRateLimited
+		}
+		if strings.Contains(message, "(http 403)") {
+			var response struct{ Message string }
+			_ = json.Unmarshal(out.Bytes(), &response)
+			message += " " + strings.ToLower(response.Message)
+			for _, reason := range []string{"rate limit exceeded", "secondary rate limit", "abuse detection mechanism"} {
+				if strings.Contains(message, reason) {
+					return nil, ErrGitHubRateLimited
+				}
+			}
+		}
 		for _, code := range []string{"(HTTP 401)", "(HTTP 403)", "(HTTP 404)"} {
 			if strings.Contains(stderr.String(), code) {
 				return nil, ErrGitHubAccessDenied

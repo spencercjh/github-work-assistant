@@ -213,7 +213,10 @@ func (s *Service) ReconcileTaskCompletion(ctx context.Context) error {
 	var errs []error
 	for _, watch := range watches {
 		key := watch.Key()
-		if !s.allowed(ctx, key) {
+		if err := s.checkAccess(ctx, key); err != nil {
+			if !errors.Is(err, ErrWorkDenied) {
+				errs = append(errs, err)
+			}
 			continue
 		}
 		d, err := s.Store.Discussion(ctx, key)
