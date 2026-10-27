@@ -763,3 +763,91 @@ func TestForkBranchReplacementRequiresExactOperatorGrant(t *testing.T) {
 		t.Fatal("replacement accepted a changed remote ref")
 	}
 }
+
+func TestForkRestartMergedLegacyRoundWithoutAcceptingOldProof(t *testing.T) {
+	s, g, _ := forkFixture(t)
+	ctx := t.Context()
+	in, w := currentForkInput(t, s)
+	ws, err := s.PrepareWorkspace(ctx, in, g.repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPath, cleanup, err := s.forkTestWorktree(ctx, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := forkTestTree(ctx, testPath, g.target)
+	cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The old implementation pushed a tested integration commit, then the user
+	// merged it before the upgrade could record completion.
+	integration := syntheticCommit(t, g.repository, tree, g.target, w.Fork.Upstream)
+	g.pr, g.prBranch, g.remoteHead = 1, w.Fork.Branch, integration
+	g.mergeCommit = syntheticCommit(t, g.repository, tree, g.target, integration)
+	g.target, g.closed, g.merged = g.mergeCommit, true, true
+	p := *w.Fork
+	p.ValidatedHead, p.ValidatedBase, p.ValidatedGuide = integration, p.InitialTarget, in.GuideVersion
+	if err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	in, w = currentForkInput(t, s)
+	if err = s.RecordWorkResult(ctx, WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "merged", Summary: "Legacy proof must not count as current validation"}); err == nil {
+		t.Fatal("legacy proof accepted as success")
+	}
+	// Even an attempted new test cannot change the already-merged PR head.
+	if _, err = s.TestWorkspace(ctx, in); err != nil && !errors.Is(err, ErrStaleWork) {
+		t.Fatal(err)
+	}
+	in, _ = currentForkInput(t, s)
+	retired, err := s.RestartFork(ctx, in)
+	if err != nil {
+		t.Fatal("explicit legacy recovery rejected", err)
+	}
+	if retired.Phase != "restart" || retired.LastSuccess != "" {
+		t.Fatal("legacy round marked successful", retired)
+	}
+	if err = s.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Store.ForkProgress(ctx, w.Event.Key)
+	if err != nil || current.Round != p.Round || current.Phase != "restart" {
+		t.Fatal("restarted without new upstream", current, err)
+	}
+	g.upstream = syntheticCommit(t, g.repository, fixtureGit(t, g.repository, "", "rev-parse", g.upstream+"^{tree}"), g.upstream)
+	if err = s.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, next := currentForkInput(t, s)
+	if next.Fork.Round == p.Round || next.Fork.Upstream != g.upstream || next.Fork.PR != 0 || next.Fork.ValidatedTree != "" || next.Fork.LastSuccess != "" {
+		t.Fatal("legacy recovery did not release later updates without proof", next.Fork)
+	}
+}
+
+func TestForkLegacyRecoveryDoesNotBypassOrdinaryMergeVerification(t *testing.T) {
+	for _, scenario := range []string{"original-upstream-head", "upstream-missing-from-target"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, g, _ := forkFixture(t)
+			in, w := currentForkInput(t, s)
+			tree := fixtureGit(t, g.repository, "", "rev-parse", g.target+"^{tree}")
+			g.pr, g.prBranch, g.remoteHead = 1, w.Fork.Branch, w.Fork.Upstream
+			if scenario == "original-upstream-head" {
+				g.target = syntheticCommit(t, g.repository, tree, g.target, w.Fork.Upstream)
+			} else {
+				g.remoteHead = syntheticCommit(t, g.repository, tree, g.target, w.Fork.Upstream)
+			}
+			g.mergeCommit, g.closed, g.merged = g.target, true, true
+			if err := s.Collect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			in, _ = currentForkInput(t, s)
+			if _, err := s.RestartFork(t.Context(), in); err == nil {
+				t.Fatal("bypassed current merge verification")
+			}
+		})
+	}
+}

@@ -113,8 +113,8 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 	return s.Store.SaveForkProgress(ctx, w.Event.Key, w.Fork.Revision, p, &in)
 }
 
-// Restart only after a prior PR was deliberately closed without merging. This
-// never force-pushes, deletes a workspace or treats an abandoned round as success.
+// Restart after a closed PR, including explicit retirement of an already
+// merged legacy integration head. Never record that legacy proof as success.
 func (s *Service) RestartFork(ctx context.Context, in WorkInput) (ForkProgress, error) {
 	if _, err := s.RefreshWorkContext(ctx, in.EventID); err != nil {
 		return ForkProgress{}, err
@@ -129,11 +129,12 @@ func (s *Service) RestartFork(ctx context.Context, in WorkInput) (ForkProgress, 
 	var snapshot Snapshot
 	_ = json.Unmarshal(w.Snapshot, &snapshot)
 	pull := snapshot.Objects["pull"]
-	if pull["state"] != "closed" || pull["merged"] != false {
-		return ForkProgress{}, errors.New("restart requires a closed unmerged sync PR")
+	legacyMerged := pull["merged"] == true && shaRE.MatchString(str(pull["head"])) && pull["head"] != w.Fork.Upstream && forkFacts(w)["contains_pinned"] == true
+	if pull["state"] != "closed" || (pull["merged"] != false && !legacyMerged) {
+		return ForkProgress{}, errors.New("restart requires a closed unmerged PR or explicit retirement of a merged legacy integration head already containing pinned upstream")
 	}
 	p := *w.Fork
-	p.Phase = "restart"
+	p.Phase, p.NextAttempt = "restart", 0
 	err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil)
 	return p, err
 }
