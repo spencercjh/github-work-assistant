@@ -92,11 +92,21 @@ def main():
                     return self.reply(200, identity)
                 if path == "/internal/agent-api/channel-members":
                     return self.reply(200, {"channel": {"ref": "#github-work", "type": "channel"},
-                                            "agents": [{"name": "collector"}, {"name": "executor"}]})
+                                            "agents": [{"name": "collector"}, {"name": "executor"}],
+                                            "humans": [{"name": "owner"}]})
                 if path == "/internal/agent-api/tasks":
                     status_file = root / "task-status"
                     return self.reply(200, {"tasks": [{"taskNumber": 17, "messageId": "11111111-1111-1111-1111-111111111111",
                                                       "claimedByName": task_owner, "status": status_file.read_text() if status_file.exists() else task_status}]})
+                if path == "/internal/agent-api/history":
+                    query = dict(parse_qsl(urlsplit(self.path).query))
+                    assert query["channel"] == "#github-work:11111111" and query["consume"] == "false"
+                    assert query["around"] == "33333333-3333-4333-8333-333333333333"
+                    report = root / "decision-report"
+                    messages = []
+                    if report.exists():
+                        messages = [{"id": query["around"], "sender_name": "executor", "sender_type": "agent", "content": report.read_text()}]
+                    return self.reply(200, {"target": query["channel"], "messages": messages})
                 self.reply(404, {})
 
             def do_POST(self):
@@ -195,7 +205,7 @@ print('Task status updated')
             port.bind(("127.0.0.1", 0))
             db_port = port.getsockname()[1]
         base = [str(REPO / "bin/ghraft"), "init", "--dir", str(instance), "--raft-token-file", str(root / "token"),
-                "--notify", "@owner", "--db-port", str(db_port),
+                "--decision-maker", "@owner", "--db-port", str(db_port),
                 "--raft-api", f"https://127.0.0.1:{server.server_port}"]
         base += ["--database", args.database]
         base += ["--task-channel", "#github-work"] if args.delivery == "shared" else ["--recipient", "@executor"]
@@ -241,6 +251,8 @@ print('Task status updated')
             event = events[0]["event_id"]
             context = run(cli + ["work-context", "--event", event], parse=True)
             assert context["guide"]["mode"] == "read-only"
+            assert context["guide"]["decision_maker"] == "@owner"
+            assert json.loads((instance / "config.json").read_text())["notify_target"] == ""
             run(cli + ["deliver"])
             assert len(received) == 1
             assert run(cli + ["events"], parse=True)[0]["state"] == "accepted"
@@ -258,6 +270,20 @@ print('Task status updated')
                 assert run(verify + ["--executor", "@loser"], parse=True)["execute"] is False
                 declined = run(cli + ["record-triage", "--event", event, "--executor", "@loser", "--outcome", "quiet", "--reason-file", str(root / "reason")], parse=True)
                 assert declined["execute"] is False and declined["recorded"] is False
+                # A local result is not a human request. Only an actual report
+                # addressed in the original discussion may become needs-decision.
+                work_args = ["--event", event, "--executor", "@executor", "--version", context["current_version"],
+                             "--guide", context["guide"]["version"], "--task", "11111111-1111-1111-1111-111111111111"]
+                run(cli + ["link-task"] + work_args)
+                decision_args = cli + ["record-work-result"] + work_args + ["--report", "33333333-3333-4333-8333-333333333333",
+                                 "--outcome", "needs-decision", "--summary-file", str(root / "reason")]
+                run(decision_args, fail=True)
+                (root / "decision-report").write_text("`@owner` Choose the migration policy.")
+                run(decision_args, fail=True)
+                (root / "decision-report").write_text("@owner Should we keep the old API? I recommend keeping it during migration.")
+                run(decision_args)
+                run(decision_args)  # Reusing the same request never sends another mention.
+                assert len(received) == 1
             run(cli + ["record-triage", "--event", event, "--executor", "@executor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
             assert not run(cli + ["pending"], parse=True)
 

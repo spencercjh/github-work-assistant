@@ -21,7 +21,7 @@ func fixtureOptions(t *testing.T) Options {
 	identity := app.ExternalIdentity{}
 	identity.Agent.ID, identity.Agent.Name, identity.Agent.External = "sender-id", "collector", true
 	identity.Server.ID = "server-id"
-	return Options{Database: "mysql", Dir: filepath.Join(base, "instance with ' % $ characters"), Executable: executable, Token: []byte("sk_agent_local_fixture"), Identity: identity, GitHubLogin: "fixture-user", Recipient: "@worker", Notify: "@owner", RaftAPI: "https://api.raft.build", Port: 13306}
+	return Options{Database: "mysql", Dir: filepath.Join(base, "instance with ' % $ characters"), Executable: executable, Token: []byte("sk_agent_local_fixture"), Identity: identity, GitHubLogin: "fixture-user", Recipient: "@worker", Notify: "@owner", DecisionMaker: "@owner", RaftAPI: "https://api.raft.build", Port: 13306}
 }
 
 func TestInstanceIsPrivateCompleteAndNeverOverwritten(t *testing.T) {
@@ -140,6 +140,41 @@ func TestSharedChannelSetupAndClaimInstructions(t *testing.T) {
 	o.TaskChannel = "#work"
 	if err := Write(o); err == nil {
 		t.Fatal("both delivery modes accepted")
+	}
+}
+
+func TestDecisionMentionSetupDoesNotEnableDMs(t *testing.T) {
+	o := fixtureOptions(t)
+	o.Recipient, o.TaskChannel, o.Notify = "", "#github-work", ""
+	if err := Write(o); err != nil {
+		t.Fatal(err)
+	}
+	c, err := app.LoadConfig(filepath.Join(o.Dir, "config.json"))
+	if err != nil || c.DecisionMaker != "@owner" || c.NotifyTarget != "" {
+		t.Fatal("decision target missing or enabled DMs", err)
+	}
+	g, err := c.RepositoryGuide("example/fixture")
+	if err != nil || g.DecisionMaker != "@owner" || g.TaskTarget != o.TaskChannel {
+		t.Fatal("decision maker absent from work guidance", err)
+	}
+	guide, err := os.ReadFile(filepath.Join(o.Dir, "EXECUTOR.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phrase := range []string{"本实例的决策人是 @owner", "裸提及开头", "不额外私聊", "同一个未决问题只提醒一次", "waiting", "needs-decision", "提及未送达"} {
+		if !strings.Contains(string(guide), phrase) {
+			t.Fatal("missing decision instruction", phrase)
+		}
+	}
+	for _, handle := range []string{"", "owner", "@owner~human", "@owner~agent", "@owner @other", "@owner\n", "@owner:1234", "dm:@owner"} {
+		o := fixtureOptions(t)
+		o.DecisionMaker = handle
+		if err := Write(o); err == nil {
+			t.Fatal("ambiguous decision handle accepted", handle)
+		}
+		if _, err := os.Stat(o.Dir); !os.IsNotExist(err) {
+			t.Fatal("invalid handle left a partial installation")
+		}
 	}
 }
 

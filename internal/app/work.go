@@ -189,6 +189,11 @@ func (s *Service) RecordWorkResult(ctx context.Context, in WorkResult) error {
 	if in.Outcome == "changes-ready" && w.Guide.Mode != "local-edit" {
 		return ErrWorkDenied
 	}
+	if in.Outcome == "needs-decision" && s.Config.SharedTasks() {
+		if err := s.verifyDecisionReport(ctx, w, in); err != nil {
+			return err
+		}
+	}
 	if w.Fork != nil {
 		if in.Outcome == "merged" {
 			if _, err := s.RefreshWorkContext(ctx, in.EventID); err != nil {

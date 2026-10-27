@@ -130,6 +130,15 @@ func TestFinishWorkRequiresDeliveryAndHandlingOfEveryEvent(t *testing.T) {
 				deliverEvent(t, s, ev)
 			}
 			if missing == "waiting" || missing == "needs-decision" {
+				if missing == "needs-decision" {
+					s.Config.DecisionMaker, s.Raft.Config.DecisionMaker = "@owner", "@owner"
+					guide, err := s.Config.RepositoryGuide("example/fixture")
+					if err != nil {
+						t.Fatal(err)
+					}
+					in.GuideVersion = guide.Version
+					f.reportID, f.reportAuthor, f.reportKind, f.reportContent = fixtureReport, "worker", "agent", "@owner Which follow-up should continue?"
+				}
 				if _, err := s.LinkTask(t.Context(), in); err != nil {
 					t.Fatal(err)
 				}

@@ -32,6 +32,7 @@ case "${storage_choice:-1}" in
   *) printf 'Choose 1, 2 or 3.\n' >&2; exit 1 ;;
 esac
 read -r -p 'Shared task channel (e.g. #github-work; add the sender and workers in Raft first): ' task_channel
+read -r -p 'Human to mention when a decision is needed (e.g. @owner; must be in the channel): ' decision_maker
 read -r -p 'Human handle for useful findings (optional): ' notify
 read -r -p 'Private repository scope (empty disables; owner/repo, owner/* or *; comma-separated): ' private_repositories
 read -r -s -p 'External Agent login token (hidden): ' credential
@@ -40,7 +41,7 @@ token_file=$(mktemp)
 trap 'rm -f -- "$token_file"' EXIT
 printf '%s\n' "$credential" > "$token_file"
 unset credential
-bin/ghraft init --raft-token-file "$token_file" --task-channel "$task_channel" --notify "$notify" --private-repositories "$private_repositories" "${database_args[@]}"
+bin/ghraft init --raft-token-file "$token_file" --task-channel "$task_channel" --decision-maker "$decision_maker" --notify "$notify" --private-repositories "$private_repositories" "${database_args[@]}"
 rm -f -- "$token_file"
 if [[ -f state/assistant/database.yml ]]; then
   docker compose -f state/assistant/database.yml up -d --wait

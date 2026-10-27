@@ -41,6 +41,7 @@ type Config struct {
 	PollSeconds                int        `json:"poll_seconds"`
 	Discover                   bool       `json:"discover_notifications"`
 	NotifyTarget               string     `json:"notify_target"`
+	DecisionMaker              string     `json:"decision_maker,omitempty"`
 	LookbackHours              int        `json:"lookback_hours"`
 	// Only local development may use loopback HTTP. Raft API still requires HTTPS.
 	LocalHTTP     bool               `json:"local_http"`
@@ -113,6 +114,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if c.NotifyTarget != "" && !strings.HasPrefix(c.NotifyTarget, "dm:@") {
 		return c, errors.New("notifications require an explicit DM destination")
+	}
+	if c.DecisionMaker != "" && !agentHandleRE.MatchString(c.DecisionMaker) {
+		return c, errors.New("decision_maker must be one human's stable Raft handle, such as @owner")
 	}
 
 	if c.PollSeconds < 60 {
