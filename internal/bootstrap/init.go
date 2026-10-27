@@ -433,11 +433,11 @@ github_actions 中已委托的动作由你通过 gh 执行；执行前完成 lin
 
 ## 持续维护有定制改动的 fork
 
-work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha、sync_branch 和已有 pr。按可信仓库指引理解定制能力，用上游改动和回归测试判断如何适配；本轮提交固定，新上游更新留到下一轮。同步 PR 的评审和检查仍属于这项维护工作，不另建任务。
+work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha、sync_branch 和已有 pr。按可信仓库指引理解定制能力，核对上游改动对它的影响；本轮提交固定，新上游更新留到下一轮。同步 PR 的评审和检查仍属于这项维护工作，不另建任务。
 
-先 link-task，获取目标仓库与上游的已核验提交，然后 prepare-worktree --repo <目标仓库本地克隆>。冲突解决后按仓库约定提交；再次 prepare-worktree，直到本轮上游和当前目标都已包含在工作分支。工作区按轮次复用，不能重置已有适配。运行 test-worktree，只有 passed=true 才取得与当前提交、目标和指引绑定的测试结果。prepare-worktree 和 verify-worktree 不代表测试通过。
+先 link-task，获取目标仓库与上游的已核验提交，然后 prepare-worktree --repo <目标仓库本地克隆>。返回的源工作区处于 detached 状态，HEAD 必须始终等于本轮上游 SHA，不添加整合提交。运行 test-worktree，程序在另一临时工作区合并当前目标和上游并测试，不生成或推送测试提交。只有 passed=true 才取得与上游、目标、合并文件树和指引绑定的证明。目标或指引变化需重测；冲突、测试失败或需要改写上游代码时请求决策。旧版工作区原样保留，旧测试证明不能沿用。prepare-worktree 和 verify-worktree 不代表测试通过。
 
-每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr 只能使用 sync_branch，merge 使用目标分支。只允许正常推送并保留历史；PR 必须采用 merge commit。只配置 push/open-pr 时，由人完成合入，仍可核验结果并记录 merged。GitHub PR 已合入后，刷新并读取 current_event_id 对应的新事件，等待投递确认，重新关联版本，再保存 merged；程序检查实际合并提交的树和祖先关系。旧事件不能代表新的核验结果。
+每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr 只能使用 sync_branch，merge 使用目标分支。默认只允许正常推送；精确 sync_branch_replacement 授权通过检查并返回 expected_remote_head 时，才可用显式 --force-with-lease 替换指定旧提交。PR 必须采用 merge commit。只配置 push/open-pr 时，由人完成合入，仍可核验结果并记录 merged。GitHub PR 已合入后，刷新并读取 current_event_id 对应的新事件，等待投递确认，重新关联版本，再保存 merged；程序检查实际合并提交的树和祖先关系。旧事件不能代表新的核验结果。
 
 waiting 保存等待条件，needs-decision 保存必须由人决定的具体问题；不可用 quiet 代替维护结果。处理超时会有限次唤醒原负责人，不交给其他执行者。PR 被关闭但未合入时先解释原因；只有决定重试后才 restart-sync，新轮次不继承旧测试证据。详细配置、操作和恢复方法见仓库 docs/FORK-MAINTENANCE.md。
 

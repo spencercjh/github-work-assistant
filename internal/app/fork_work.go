@@ -28,7 +28,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 		return result, ErrStaleWork
 	}
 	if in.Action == "push" || in.Action == "open-pr" || in.Action == "merge" {
-		if p.ValidatedHead != in.Head || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != in.Base {
+		if p.ValidatedHead != in.Head || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != in.Base || p.ValidatedHead != p.Upstream || !shaRE.MatchString(p.ValidatedTree) {
 			return result, errors.New("run test-worktree for this commit, target and guide before writing")
 		}
 		local, err := s.verifyForkWorkspace(ctx, w, in.WorkInput)
@@ -39,6 +39,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 			return result, err
 		}
 	}
+	replacementHead := ""
 	wantRef := p.Branch
 	if in.Action == "merge" {
 		wantRef = f.Target.Branch
@@ -57,7 +58,11 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 				return result, err
 			}
 			if _, err = gitLocal(ctx, local.Path, "merge-base", "--is-ancestor", remote, in.Head); err != nil {
-				return result, errors.New("push must preserve the existing remote branch; fetch and integrate it")
+				r := w.Guide.SyncBranchReplacement
+				if r == nil || r.Branch != p.Branch || r.From != remote || r.To != in.Head {
+					return result, errors.New("existing remote branch is not an ancestor of pinned upstream; request an exact branch replacement or restart decision")
+				}
+				replacementHead = remote
 			}
 		}
 	case "open-pr":
@@ -75,7 +80,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 	default:
 		return result, ErrWorkDenied
 	}
-	return GitHubActionCheck{GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: f.Target.Branch, Verification: "Current owner, delegation, branch and revisions checked. Only normal fast-forward pushes to branch are permitted; merge this PR using a merge commit and expected head, without bypassing repository rules. Inspect current CI and reviews. This check performs no GitHub write."}, nil
+	return GitHubActionCheck{ExpectedRemoteHead: replacementHead, GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: f.Target.Branch, Verification: "Current owner, delegation, branch and revisions checked. Only normal fast-forward pushes are permitted unless expected_remote_head is returned under an exact operator replacement grant; then use --force-with-lease=refs/heads/<branch>:<expected_remote_head>, never an unconditional force push; merge this PR using a merge commit and expected head, without bypassing repository rules. Inspect current CI and reviews. This check performs no GitHub write."}, nil
 }
 
 func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkResult) error {
@@ -91,12 +96,12 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 	switch in.Outcome {
 	case "merged":
 		pull, facts := snapshot.Objects["pull"], forkFacts(w)
-		if pull["merged"] != true || p.ValidatedHead == "" || pull["head"] != p.ValidatedHead || p.ValidatedGuide != in.GuideVersion || facts["contains_pinned"] != true || facts["contains_validated"] != true || facts["merge_verified"] != true {
+		if pull["merged"] != true || p.ValidatedHead != p.Upstream || !shaRE.MatchString(p.ValidatedTree) || pull["head"] != p.ValidatedHead || p.ValidatedGuide != in.GuideVersion || facts["contains_pinned"] != true || facts["contains_validated"] != true || facts["merge_verified"] != true {
 			return errors.New("sync completion requires the tested commit and pinned upstream in the remote target, plus refreshed merged PR evidence")
 		}
 		p.LastSuccess, p.Phase, p.NextAttempt = p.Upstream, "synced", 0
 	case "changes-ready":
-		if p.ValidatedHead == "" || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != str(forkFacts(w)["target_sha"]) {
+		if p.ValidatedHead != p.Upstream || !shaRE.MatchString(p.ValidatedTree) || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != str(forkFacts(w)["target_sha"]) {
 			return errors.New("changes-ready requires current fork regression evidence")
 		}
 		p.Phase, p.NextAttempt = "waiting", time.Now().Add(time.Hour).Unix()

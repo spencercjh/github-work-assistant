@@ -140,10 +140,10 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 			return o, errors.New("previous sync PR was not returned; do not replace it")
 		}
 	}
-	// A validated commit may still exist only in the local worktree. Query it
-	// remotely only after the corresponding PR was actually merged.
+	// Verify the actual merge against the tested target, upstream and tree only
+	// after the corresponding PR was actually merged.
 	pull := o.Objects["pull"]
-	if pull["merged"] == true && p.ValidatedHead != "" && pull["head"] == p.ValidatedHead {
+	if pull["merged"] == true && p.ValidatedHead == p.Upstream && shaRE.MatchString(p.ValidatedTree) && pull["head"] == p.ValidatedHead {
 		o.MergeCommit = str(pull["merge_commit_sha"])
 		if !shaRE.MatchString(o.MergeCommit) {
 			return o, errors.New("merged PR has no valid merge commit")
@@ -164,16 +164,14 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 		if err != nil {
 			return o, err
 		}
-		testedCommit, err := g.get(ctx, "repos/"+f.Target.Repo+"/git/commits/"+p.ValidatedHead)
-		if err != nil {
-			return o, err
-		}
-		tree, testedTree := str(obj(mergeCommit["tree"])["sha"]), str(obj(testedCommit["tree"])["sha"])
-		if !shaRE.MatchString(tree) || !shaRE.MatchString(testedTree) {
+		tree := str(obj(mergeCommit["tree"])["sha"])
+		if !shaRE.MatchString(tree) {
 			return o, errors.New("invalid commit tree")
 		}
+		parents, _ := mergeCommit["parents"].([]any)
+		parentsMatch := len(parents) == 2 && str(obj(parents[0])["sha"]) == p.ValidatedBase && str(obj(parents[1])["sha"]) == p.ValidatedHead
 		o.ContainsValidated = mergeInTarget && testedInMerge
-		o.MergeVerified = mergeInTarget && testedInMerge && upstreamInMerge && tree == testedTree
+		o.MergeVerified = mergeInTarget && testedInMerge && upstreamInMerge && parentsMatch && tree == p.ValidatedTree
 	}
 	// Pin all fetched facts to one target revision; CI/reviews are already
 	// protected against moving PR heads by the ordinary PR collector.

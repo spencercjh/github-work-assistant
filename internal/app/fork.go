@@ -91,6 +91,7 @@ type ForkProgress struct {
 	LastSuccess      string   `json:"last_success_upstream_sha"`
 	ValidatedHead    string   `json:"validated_head"`
 	ValidatedBase    string   `json:"validated_base"`
+	ValidatedTree    string   `json:"validated_tree"`
 	ValidatedGuide   string   `json:"validated_guide"`
 	TestLog          string   `json:"test_log,omitempty"`
 	TestLogHash      string   `json:"test_log_hash,omitempty"`
@@ -145,7 +146,7 @@ func (d WorkDefinition) Repository() string {
 func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
 	g, err := c.RepositoryGuide(d.Repository())
 	if err == nil && d.Fork != nil {
-		g.Text += "\n\nMaintain the target fork's custom behavior while integrating upstream. Preserve upstream ancestry using merge commits. Resolve semantic changes, run all configured regression commands, and verify remote outcomes. Upstream is read-only. Push only the current round's sync branch; merge only its PR into the configured target. No force pushes.\nTrusted maintenance rule: " + string(canonical(d.Fork))
+		g.Text += "\n\nKeep the sync PR head exactly equal to the pinned upstream commit; do not add integration commits or edits. Test its temporary merge with the current target to preserve custom behavior. Conflicts or failed regressions require a decision. Merge using a merge commit only when authorized, and verify the resulting tree against the tested merge tree. Upstream is read-only. Push only the current round's sync branch; merge only its PR into the configured target. No force pushes except an exact operator sync_branch_replacement grant checked against the expected remote head.\nTrusted maintenance rule: " + string(canonical(d.Fork))
 		g.Version = ""
 		g.Version = hash(canonical(g))
 	}
