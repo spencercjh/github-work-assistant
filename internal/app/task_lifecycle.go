@@ -213,10 +213,7 @@ func (s *Service) ReconcileTaskCompletion(ctx context.Context) error {
 	var errs []error
 	for _, watch := range watches {
 		key := watch.Key()
-		if err := s.checkAccess(ctx, key); err != nil {
-			if !errors.Is(err, ErrWorkDenied) {
-				errs = append(errs, err)
-			}
+		if !s.watchConfigured(ctx, key) {
 			continue
 		}
 		d, err := s.Store.Discussion(ctx, key)
@@ -248,9 +245,7 @@ func (s *Service) ReconcileTaskCompletion(ctx context.Context) error {
 			errs = append(errs, err)
 			continue
 		}
-		if observed < time.Now().Add(-10*time.Minute).Unix() {
-			continue
-		}
+
 		ended := githubEnded(body)
 		marker, err := s.Store.Meta(ctx, finishKey(key), "")
 		if err != nil {
@@ -309,6 +304,35 @@ func (s *Service) ReconcileTaskCompletion(ctx context.Context) error {
 			reason, prefix = "GitHub 在任务收尾时重新打开。恢复原任务，读取最新状态后继续处理。", "resume:"
 		}
 		if reason != "" {
+			if err := s.checkAccess(ctx, key); err != nil {
+				if errors.Is(err, ErrGitHubRateLimited) {
+					return errors.Join(append(errs, err)...)
+				}
+				if !errors.Is(err, ErrWorkDenied) {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			// Suspended terminal snapshots can be old after an upgrade. Refresh
+			// only an eligible, already handled task that lacks a recovery request.
+			// Existing requests and completed tasks never resume periodic scans.
+			if observed < time.Now().Add(-10*time.Minute).Unix() {
+				if err := s.collectWatch(ctx, watch); err != nil {
+					errs = append(errs, err)
+					if errors.Is(err, ErrGitHubRateLimited) {
+						return errors.Join(errs...)
+					}
+					continue
+				}
+				_, current, err := s.Store.Snapshot(ctx, key)
+				if err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				if current != version {
+					continue
+				} // Fresh changes provide their own wake-up.
+			}
 			if _, err := s.Store.RequestWork(ctx, key, version, prefix+id, reason); err != nil && !errors.Is(err, ErrStaleWork) {
 				errs = append(errs, err)
 			}

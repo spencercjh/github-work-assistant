@@ -337,16 +337,22 @@ func TestPostCompletionUpdatesStayDoneWithoutExecutionAuthority(t *testing.T) {
 }
 
 func TestCompletionReconcilesExistingWorkOnceWithoutCreatingAnotherTask(t *testing.T) {
-	s, f, _, in := lifecycleFixture(t, Objects{"pull": {"state": "closed", "merged": true}})
+	s, f, g, in := lifecycleFixture(t, Objects{"pull": {"state": "closed", "merged": true}})
 	quietEvent(t, s, in.EventID)
 	f.status = "in_review"
+	store := s.Store.(*Store)
+	if _, err := store.db.ExecContext(t.Context(), `UPDATE ghraft_snapshots SET observed_at=?`, time.Now().Add(-time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	refreshes := 0
+	g.onCollect = func() { refreshes++ }
 	before := len(f.updates)
 	for range 2 {
 		if err := s.Deliver(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if f.creates != 1 || len(f.updates) != before+1 || f.status != "in_review" {
+	if f.creates != 1 || len(f.updates) != before+1 || f.status != "in_review" || refreshes != 1 {
 		t.Fatal("completion request duplicated or mutated task")
 	}
 	id, _ := s.Store.Meta(t.Context(), "current-event:example/fixture#1", "")
@@ -370,7 +376,7 @@ func TestCompletionReconcilesExistingWorkOnceWithoutCreatingAnotherTask(t *testi
 }
 
 func TestCompletionReconciliationRespectsManualStopsAndStaleEvidence(t *testing.T) {
-	for _, blocked := range []string{"closed", "human", "waiting", "stale", "revoked"} {
+	for _, blocked := range []string{"closed", "human", "waiting", "revoked"} {
 		t.Run(blocked, func(t *testing.T) {
 			s, f, _, in := lifecycleFixture(t, Objects{"issue": {"state": "closed"}})
 			if blocked != "waiting" {
@@ -384,11 +390,7 @@ func TestCompletionReconciliationRespectsManualStopsAndStaleEvidence(t *testing.
 				f.ownerType = "user"
 			case "revoked":
 				s.Config.Watches = nil
-			case "stale":
-				store := s.Store.(*Store)
-				if _, err := store.db.ExecContext(t.Context(), `UPDATE ghraft_snapshots SET observed_at=?`, time.Now().Add(-time.Hour).Unix()); err != nil {
-					t.Fatal(err)
-				}
+
 			}
 			if err := s.ReconcileTaskCompletion(t.Context()); err != nil {
 				t.Fatal(err)

@@ -166,7 +166,11 @@ if p=='user':
     data={'login':'fixture-user'}
 elif p.startswith('notifications?'):
     assert a[6:]==['--paginate','--slurp'] and 'per_page=50' in p
-    data=[[{'updated_at':datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    # Notification versions represent fixture events, not wall-clock seconds.
+    root=Path(__file__).resolve().parents[1]
+    revision=sum(weight for name,weight in [('updated',1),('closed',2),('metadata',4),('reopened',8)] if (root/name).exists())
+    stamp=datetime.datetime(2026,1,1,tzinfo=datetime.timezone.utc)+datetime.timedelta(seconds=revision)
+    data=[[{'updated_at':stamp.strftime('%Y-%m-%dT%H:%M:%SZ'),
             'subject':{'type':'Issue','url':'https://api.github.com/repos/example/fixture/issues/1'},
             'repository':{'private':False}}]]
 elif p=='repos/example/fixture': data={'full_name':'example/fixture','private':False}
@@ -344,6 +348,7 @@ print('Task status updated')
                 assert (root / "task-status").read_text() == "done"
                 assert len(received) == 4 and all("target" in body for body in received[1:])
                 (root / "closed").unlink()
+                (root / "reopened").touch()
                 run(cli + ["collect"])
                 run(cli + ["deliver"])
                 assert "恢复为 in_progress" in received[-1]["content"]

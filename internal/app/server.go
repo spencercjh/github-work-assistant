@@ -113,6 +113,9 @@ func (s *Service) Collect(ctx context.Context) error {
 func (s *Service) Deliver(ctx context.Context) error {
 	var errs []error
 	if err := s.ReconcileTaskCompletion(ctx); err != nil {
+		if errors.Is(err, ErrGitHubRateLimited) {
+			return err
+		}
 		errs = append(errs, err)
 	}
 	events := []Event{}
