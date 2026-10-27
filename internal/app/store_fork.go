@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -74,10 +75,42 @@ func (s *Store) ObserveFork(ctx context.Context, spec ForkSpec, expected ForkPro
 		o.PR, o.Objects, o.SyncHead, o.MergeCommit = 0, nil, "", ""
 		o.ContainsPinned, o.ContainsValidated, o.MergeVerified = o.ContainsLatest, false, false
 	}
-	if _, err = s.observeTx(ctx, tx, spec.Key(), forkSnapshot(spec, next, o)); err != nil {
+	body := forkSnapshot(spec, next, o)
+	if p.Phase == "synced" && next.Phase == "synced" && next.Round == p.Round {
+		body, err = completedForkSnapshot(ctx, tx, spec.Key(), body)
+		if err != nil {
+			return err
+		}
+	}
+	if _, err = s.observeTx(ctx, tx, spec.Key(), body); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// Preserve completed evidence and report associations when only the collector's
+// verification rules changed. Active rounds still require fresh verification;
+// requireForkWork forbids reusing completed evidence for writes or completion.
+func completedForkSnapshot(ctx context.Context, tx *database.Tx, key string, body []byte) ([]byte, error) {
+	var previous string
+	err := tx.QueryRowContext(ctx, `SELECT body FROM ghraft_snapshots WHERE resource_key=?`, key).Scan(&previous)
+	if errors.Is(err, ErrNotFound) {
+		return body, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var old, current Snapshot
+	if json.Unmarshal([]byte(previous), &old) != nil || json.Unmarshal(body, &current) != nil || old.Objects["fork"] == nil || current.Objects["fork"] == nil {
+		return body, nil
+	}
+	for _, name := range []string{"contains_validated", "merge_verified", "merge_commit_sha"} {
+		old.Objects["fork"][name] = current.Objects["fork"][name]
+	}
+	if bytes.Equal(canonical(old), body) {
+		return []byte(previous), nil
+	}
+	return body, nil
 }
 
 func (s *Store) SaveForkProgress(ctx context.Context, key string, revision int64, next ForkProgress, result *WorkResult) error {
