@@ -250,23 +250,41 @@ func (g GH) notificationWatch(row map[string]any) (Watch, bool) {
 	}
 	return w, true
 }
-func (g GH) Discover(ctx context.Context, since string) ([]Watch, string, error) {
+
+type Notification struct {
+	Watch
+	UpdatedAt int64
+	Version   string
+}
+
+func (g GH) Discover(ctx context.Context, since string) ([]Notification, string, error) {
 	// Notifications supports at most 50 items per page; g.pages follows all pages.
 	rows, e := g.pages(ctx, "notifications?all=true&per_page=50&since="+url.QueryEscape(since), "")
 	if e != nil {
 		return nil, "", e
 	}
 	latest, _ := time.Parse(time.RFC3339, since)
-	seen := map[string]bool{}
-	out := []Watch{}
+	seen := map[string]int{}
+	out := []Notification{}
 	for _, row := range rows {
-		if t, e := time.Parse(time.RFC3339, str(row["updated_at"])); e == nil && t.After(latest) {
+		t, parseErr := time.Parse(time.RFC3339, str(row["updated_at"]))
+		if parseErr == nil && t.After(latest) {
 			latest = t
 		}
 		w, ok := g.notificationWatch(row)
-		if ok && !seen[w.Key()] {
-			out = append(out, w)
-			seen[w.Key()] = true
+		if !ok {
+			continue
+		}
+		marker := fields(row, "id", "updated_at", "reason")
+		marker["latest_comment_url"] = obj(row["subject"])["latest_comment_url"]
+		n := Notification{Watch: w, UpdatedAt: t.Unix(), Version: hash(canonical(marker))}
+		if i, exists := seen[w.Key()]; exists {
+			if n.UpdatedAt > out[i].UpdatedAt || (n.UpdatedAt == out[i].UpdatedAt && n.Version > out[i].Version) {
+				out[i] = n
+			}
+		} else {
+			seen[w.Key()] = len(out)
+			out = append(out, n)
 		}
 	}
 	next := latest.Add(-2 * time.Minute).Format(time.RFC3339)

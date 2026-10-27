@@ -37,9 +37,9 @@ func (g *forkFixtureSource) RepositoryClassification(_ context.Context, _ string
 	}
 	return "public", nil
 }
-func (g *forkFixtureSource) Discover(context.Context, string) ([]Watch, string, error) {
+func (g *forkFixtureSource) Discover(context.Context, string) ([]Notification, string, error) {
 	if g.pr > 0 {
-		return []Watch{{"example/fixture", g.pr}}, time.Now().UTC().Format(time.RFC3339), nil
+		return []Notification{{Watch: Watch{"example/fixture", g.pr}, Version: "fixture"}}, time.Now().UTC().Format(time.RFC3339), nil
 	}
 	return nil, time.Now().UTC().Format(time.RFC3339), nil
 }

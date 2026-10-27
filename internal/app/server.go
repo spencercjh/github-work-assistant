@@ -47,22 +47,28 @@ func (s *Service) Collect(ctx context.Context) error {
 		if e := s.Store.PutMeta(ctx, "fork-error:"+f.ID, message); e != nil {
 			errs = append(errs, e)
 		}
+		if errors.Is(err, ErrGitHubRateLimited) {
+			return errors.Join(errs...)
+		}
 	}
 	if s.Config.Discover {
 		if g, ok := s.GH.(interface {
-			Discover(context.Context, string) ([]Watch, string, error)
+			Discover(context.Context, string) ([]Notification, string, error)
 		}); ok {
 			since, e := s.Store.Meta(ctx, "notifications-cursor", time.Now().Add(-time.Duration(s.Config.LookbackHours)*time.Hour).Format(time.RFC3339))
 			if e != nil {
 				return e
 			}
-			watches, next, e := g.Discover(ctx, since)
+			notifications, next, e := g.Discover(ctx, since)
 			if e == nil {
-				for _, w := range watches {
-					if e = s.Store.RegisterWatch(ctx, w); e != nil {
+				for _, n := range notifications {
+					if e = s.Store.RegisterWatch(ctx, n.Watch); e != nil {
 						return e
 					}
-					if e = s.Store.RegisterAccess(ctx, w.Key(), "discovered"); e != nil {
+					if e = s.Store.RegisterAccess(ctx, n.Key(), "discovered"); e != nil {
+						return e
+					}
+					if e = s.rememberNotification(ctx, n); e != nil {
 						return e
 					}
 				}
@@ -71,6 +77,9 @@ func (s *Service) Collect(ctx context.Context) error {
 			if e != nil {
 				errs = append(errs, e)
 				_ = s.Store.PutMeta(ctx, "notifications-error", e.Error())
+				if errors.Is(e, ErrGitHubRateLimited) {
+					return errors.Join(errs...)
+				}
 			} else {
 				_ = s.Store.PutMeta(ctx, "notifications-error", "")
 				_ = s.Store.PutMeta(ctx, "notifications-last-success", time.Now().UTC().Format(time.RFC3339))
@@ -85,12 +94,17 @@ func (s *Service) Collect(ctx context.Context) error {
 		if !s.watchConfigured(ctx, w.Key()) {
 			continue
 		}
-		e := s.collectWatch(ctx, w)
-		if se := s.Store.CollectionStatus(ctx, w.Key(), e); se != nil {
-			errs = append(errs, se)
+		attempted, e := s.pollWatch(ctx, w)
+		if attempted {
+			if se := s.Store.CollectionStatus(ctx, w.Key(), e); se != nil {
+				errs = append(errs, se)
+			}
 		}
 		if e != nil {
-			errs = append(errs, errors.New(w.Key()+": "+e.Error()))
+			errs = append(errs, fmt.Errorf("%s: %w", w.Key(), e))
+			if errors.Is(e, ErrGitHubRateLimited) {
+				return errors.Join(errs...)
+			}
 		}
 	}
 
@@ -146,13 +160,18 @@ func (s *Service) Loop(ctx context.Context) {
 	var nextCleanup time.Time
 	for {
 		c, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		if e := s.Collect(c); e != nil {
-			log.Printf("collector: %s", e)
+		collectErr := s.Collect(c)
+		if collectErr != nil {
+			log.Printf("collector: %s", collectErr)
 		}
 		cancel()
 		c, cancel = context.WithTimeout(ctx, 2*time.Minute)
-		if e := s.Deliver(c); e != nil {
-			log.Printf("delivery: %s", e)
+		// Delivery also performs GitHub authorization reads. Preserve the queue
+		// and wait for the next cycle instead of continuing after a quota failure.
+		if !errors.Is(collectErr, ErrGitHubRateLimited) {
+			if e := s.Deliver(c); e != nil {
+				log.Printf("delivery: %s", e)
+			}
 		}
 		cancel()
 		if time.Now().After(nextCleanup) {
