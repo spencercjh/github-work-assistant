@@ -19,6 +19,10 @@ func (s *Store) ReadWork(ctx context.Context, id string) (WorkContext, error) {
 		w.Event.Receipt = json.RawMessage(receipt)
 	}
 	w.Snapshot = json.RawMessage(body)
+	w.CurrentEventID, err = s.CurrentEvent(ctx, w.Event.Key, w.CurrentVersion)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return w, err
+	}
 	link := &TaskLink{}
 	err = s.db.QueryRowContext(ctx, `SELECT task_id,target,event_id,evidence_version,guide_version FROM ghraft_work_links WHERE resource_key=?`, w.Event.Key).Scan(&link.TaskID, &link.Target, &link.EventID, &link.EvidenceVersion, &link.GuideVersion)
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -76,4 +80,16 @@ func (s *Store) SaveWorkResult(ctx context.Context, key string, in WorkResult) e
 		return err
 	}
 	return tx.Commit()
+}
+
+// CurrentEvent resolves the latest event for a snapshot, including snapshots
+// persisted before current-event indexes were introduced.
+func (s *Store) CurrentEvent(ctx context.Context, key, version string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT e.event_id FROM ghraft_events e JOIN ghraft_meta m ON m.value=e.event_id WHERE m.name=? AND e.resource_key=? AND e.version_hash=?`, "current-event:"+key, key, version).Scan(&id)
+	if errors.Is(err, ErrNotFound) {
+		// Existing snapshots created before current-event tracking can still be read.
+		err = s.db.QueryRowContext(ctx, `SELECT event_id FROM ghraft_events WHERE resource_key=? AND version_hash=? ORDER BY created_at DESC,event_id DESC LIMIT 1`, key, version).Scan(&id)
+	}
+	return id, err
 }

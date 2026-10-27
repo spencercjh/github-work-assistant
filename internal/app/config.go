@@ -20,27 +20,29 @@ type Watch struct {
 	Number int    `json:"number"`
 }
 type Config struct {
-	PrivateRepositories        []string `json:"private_repositories,omitempty"`
-	PrivateNotificationsSince  string   `json:"private_notifications_since,omitempty"`
-	PrivateNotificationDetails bool     `json:"private_notification_details,omitempty"`
-	HistoryRetentionDays       int      `json:"history_retention_days,omitempty"`
-	DatabaseDriver             string   `json:"database_driver,omitempty"`
-	RaftMode                   string   `json:"raft_mode,omitempty"`
-	ExternalAgent              string   `json:"external_agent_id,omitempty"`
-	DeliveryTarget             string   `json:"delivery_target,omitempty"`
-	Listen                     string   `json:"listen"`
-	Origin                     string   `json:"origin"`
-	RaftAPI                    string   `json:"raft_api"`
-	ClientID                   string   `json:"client_id"`
-	ServerID                   string   `json:"server_id"`
-	ServerSlug                 string   `json:"server_slug"`
-	AgentID                    string   `json:"agent_id"`
-	GitHubLogin                string   `json:"github_login"`
-	Watches                    []Watch  `json:"watches"`
-	PollSeconds                int      `json:"poll_seconds"`
-	Discover                   bool     `json:"discover_notifications"`
-	NotifyTarget               string   `json:"notify_target"`
-	LookbackHours              int      `json:"lookback_hours"`
+	Forks                      []ForkSpec `json:"forks,omitempty"`
+	PrivateRepositories        []string   `json:"private_repositories,omitempty"`
+	PrivateNotificationsSince  string     `json:"private_notifications_since,omitempty"`
+	PrivateNotificationDetails bool       `json:"private_notification_details,omitempty"`
+	HistoryRetentionDays       int        `json:"history_retention_days,omitempty"`
+	DatabaseDriver             string     `json:"database_driver,omitempty"`
+	RaftMode                   string     `json:"raft_mode,omitempty"`
+	ExternalAgent              string     `json:"external_agent_id,omitempty"`
+	DeliveryTarget             string     `json:"delivery_target,omitempty"`
+	Listen                     string     `json:"listen"`
+	Origin                     string     `json:"origin"`
+	RaftAPI                    string     `json:"raft_api"`
+	ClientID                   string     `json:"client_id"`
+	ServerID                   string     `json:"server_id"`
+	ServerSlug                 string     `json:"server_slug"`
+	AgentID                    string     `json:"agent_id"`
+	GitHubLogin                string     `json:"github_login"`
+	Watches                    []Watch    `json:"watches"`
+	PollSeconds                int        `json:"poll_seconds"`
+	Discover                   bool       `json:"discover_notifications"`
+	NotifyTarget               string     `json:"notify_target"`
+	DecisionMaker              string     `json:"decision_maker,omitempty"`
+	LookbackHours              int        `json:"lookback_hours"`
 	// Only local development may use loopback HTTP. Raft API still requires HTTPS.
 	LocalHTTP     bool               `json:"local_http"`
 	Repositories  []RepositoryPolicy `json:"repositories,omitempty"`
@@ -113,6 +115,9 @@ func LoadConfig(path string) (Config, error) {
 	if c.NotifyTarget != "" && !strings.HasPrefix(c.NotifyTarget, "dm:@") {
 		return c, errors.New("notifications require an explicit DM destination")
 	}
+	if c.DecisionMaker != "" && !agentHandleRE.MatchString(c.DecisionMaker) {
+		return c, errors.New("decision_maker must be one human's stable Raft handle, such as @owner")
+	}
 
 	if c.PollSeconds < 60 {
 		return c, errors.New("poll_seconds must be at least 60")
@@ -144,8 +149,8 @@ func LoadConfig(path string) (Config, error) {
 	}
 	c.Origin = strings.TrimRight(c.Origin, "/")
 	c.RaftAPI = strings.TrimRight(c.RaftAPI, "/")
-	if len(c.Watches) == 0 && !c.Discover {
-		return c, errors.New("configure at least one watch or enable discover_notifications")
+	if len(c.Watches) == 0 && len(c.Forks) == 0 && !c.Discover {
+		return c, errors.New("configure a watch, fork maintenance rule or discover_notifications")
 	}
 	seen := map[string]bool{}
 	for _, w := range c.Watches {
@@ -170,6 +175,9 @@ func LoadConfig(path string) (Config, error) {
 		if _, err := c.RepositoryGuide(p.Repo); err != nil {
 			return c, err
 		}
+	}
+	if err := c.validateForks(); err != nil {
+		return c, err
 	}
 	return c, nil
 }

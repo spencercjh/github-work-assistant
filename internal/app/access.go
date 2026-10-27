@@ -2,12 +2,19 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 )
 
 // Reconcile operator configuration before collection, including removed explicit watches.
 func (s *Service) reconcileWatches(ctx context.Context) error {
+	for _, f := range s.Config.Forks {
+		if err := s.Store.RegisterAccess(ctx, f.Key(), "explicit"); err != nil {
+			return err
+		}
+	}
 	for _, w := range s.Config.Watches {
 		if err := s.Store.RegisterWatch(ctx, w); err != nil {
 			return err
@@ -22,6 +29,15 @@ func (s *Service) reconcileWatches(ctx context.Context) error {
 }
 
 func (s *Service) watchConfigured(ctx context.Context, key string) bool {
+	if _, ok := s.Config.Fork(key); ok {
+		return true
+	}
+	if w, err := resourceWatch(key); err == nil {
+		owner, err := s.Store.Meta(ctx, forkPRName(w), "")
+		if err != nil || owner != "" {
+			return false
+		}
+	}
 	key = strings.ToLower(key)
 	private, err := s.Store.Meta(ctx, "private-watch:"+key, "false")
 	repo, _, _ := strings.Cut(key, "#")
@@ -38,36 +54,65 @@ func (s *Service) watchConfigured(ctx context.Context, key string) bool {
 	return err == nil && source == "discovered"
 }
 
-func (s *Service) allowed(ctx context.Context, key string) bool {
-	if !s.watchConfigured(ctx, key) {
+// Access checks fail closed, but temporary source failures are not revocations.
+func sourceAccessError(err error) error {
+	if errors.Is(err, ErrGitHubAccessDenied) || errors.Is(err, ErrRepositoryNotAllowed) {
+		return ErrWorkDenied
+	}
+	return err
+}
+
+func (s *Service) checkHTTPAccess(w http.ResponseWriter, r *http.Request, key string) bool {
+	if err := s.checkAccess(r.Context(), key); err != nil {
+		if errors.Is(err, ErrWorkDenied) {
+			fail(w, 403, "WATCH_NOT_ALLOWED")
+		} else {
+			workError(w, err)
+		}
 		return false
 	}
+	return true
+}
+
+func (s *Service) checkAccess(ctx context.Context, key string) error {
+	if f, ok := s.Config.Fork(key); ok {
+		return s.checkForkAccess(ctx, f)
+	}
+	if !s.watchConfigured(ctx, key) {
+		return ErrWorkDenied
+	}
 	blocked, err := s.Store.WatchBlocked(ctx, strings.ToLower(key))
-	if !errors.Is(err, ErrNotFound) && (err != nil || blocked) {
-		return false
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if blocked {
+		return ErrWorkDenied
 	}
 	private, err := s.Store.Meta(ctx, "private-watch:"+strings.ToLower(key), "false")
 	if err != nil {
-		return false
+		return err
 	}
 	if private == "true" {
 		repo, _, _ := strings.Cut(key, "#")
 		if !privateRepositoryAllowed(s.Config.PrivateRepositories, repo) {
-			return false
+			return ErrWorkDenied
 		}
 		// Private cached context requires current GitHub access as well as the
 		// configured scope, including on standalone CLI reads and delivery retries.
 		g, ok := s.GH.(interface {
 			RepositoryClassification(context.Context, string) (string, error)
 		})
-		if !ok || s.GH.CheckIdentity(ctx) != nil {
-			return false
+		if !ok {
+			return ErrWorkDenied
+		}
+		if err := s.GH.CheckIdentity(ctx); err != nil {
+			return sourceAccessError(err)
 		}
 		if _, err := g.RepositoryClassification(ctx, repo); err != nil {
-			return false
+			return sourceAccessError(err)
 		}
 	}
-	return true
+	return nil
 }
 
 func (s *Service) collectWatch(ctx context.Context, w Watch) error {
@@ -78,6 +123,10 @@ func (s *Service) collectWatch(ctx context.Context, w Watch) error {
 	}
 	if err != nil {
 		return err
+	}
+	var snapshot Snapshot
+	if json.Unmarshal(b, &snapshot) == nil && s.Config.managedPR(w, snapshot) {
+		return nil
 	}
 	if _, err = s.Store.Observe(ctx, w.Key(), b); err != nil {
 		return err
@@ -95,7 +144,11 @@ func (s *Service) Pending(ctx context.Context) ([]map[string]any, error) {
 			return nil, err
 		}
 		for _, item := range page {
-			if s.allowed(ctx, str(item["resource_key"])) {
+			if err := s.checkAccess(ctx, str(item["resource_key"])); err != nil {
+				if !errors.Is(err, ErrWorkDenied) {
+					return nil, err
+				}
+			} else {
 				out = append(out, item)
 				if len(out) == 100 {
 					break
@@ -117,7 +170,11 @@ func (s *Service) Events(ctx context.Context) ([]Event, error) {
 			return nil, err
 		}
 		for _, event := range page {
-			if s.allowed(ctx, event.Key) {
+			if err := s.checkAccess(ctx, event.Key); err != nil {
+				if !errors.Is(err, ErrWorkDenied) {
+					return nil, err
+				}
+			} else {
 				out = append(out, event)
 				if len(out) == 100 {
 					break

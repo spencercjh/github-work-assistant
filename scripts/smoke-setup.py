@@ -92,10 +92,21 @@ def main():
                     return self.reply(200, identity)
                 if path == "/internal/agent-api/channel-members":
                     return self.reply(200, {"channel": {"ref": "#github-work", "type": "channel"},
-                                            "agents": [{"name": "collector"}, {"name": "executor"}]})
+                                            "agents": [{"name": "collector"}, {"name": "executor"}],
+                                            "humans": [{"name": "owner"}]})
                 if path == "/internal/agent-api/tasks":
+                    status_file = root / "task-status"
                     return self.reply(200, {"tasks": [{"taskNumber": 17, "messageId": "11111111-1111-1111-1111-111111111111",
-                                                      "claimedByName": task_owner, "status": task_status}]})
+                                                      "claimedByName": task_owner, "status": status_file.read_text() if status_file.exists() else task_status}]})
+                if path == "/internal/agent-api/history":
+                    query = dict(parse_qsl(urlsplit(self.path).query))
+                    assert query["channel"] == "#github-work:11111111" and query["consume"] == "false"
+                    assert query["around"] == "33333333-3333-4333-8333-333333333333"
+                    report = root / "decision-report"
+                    messages = []
+                    if report.exists():
+                        messages = [{"id": query["around"], "sender_name": "executor", "sender_type": "agent", "content": report.read_text()}]
+                    return self.reply(200, {"target": query["channel"], "messages": messages})
                 self.reply(404, {})
 
             def do_POST(self):
@@ -108,7 +119,9 @@ def main():
                     if self.path == "/internal/agent-api/send":
                         assert body["target"] == "#github-work:11111111"
                         assert body["idempotencyKey"].startswith("github-update:")
-                        assert "@executor" in body["content"] and "恢复为 in_progress" in body["content"]
+                        assert "@" + task_owner in body["content"]
+                        if (root / "task-status").exists() and (root / "task-status").read_text() == "done" and (root / "closed").exists():
+                            assert "原任务保持 Done" in body["content"]
                         assert body["continueAnyway"] is True
                         received.append(body)
                         return self.reply(200, {"ok": True, "state": "sent", "messageId": "22222222-2222-2222-2222-222222222222"})
@@ -153,13 +166,19 @@ if p=='user':
     data={'login':'fixture-user'}
 elif p.startswith('notifications?'):
     assert a[6:]==['--paginate','--slurp'] and 'per_page=50' in p
-    data=[[{'updated_at':datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    # Notification versions represent fixture events, not wall-clock seconds.
+    root=Path(__file__).resolve().parents[1]
+    revision=sum(weight for name,weight in [('updated',1),('closed',2),('metadata',4),('reopened',8)] if (root/name).exists())
+    stamp=datetime.datetime(2026,1,1,tzinfo=datetime.timezone.utc)+datetime.timedelta(seconds=revision)
+    data=[[{'updated_at':stamp.strftime('%Y-%m-%dT%H:%M:%SZ'),
             'subject':{'type':'Issue','url':'https://api.github.com/repos/example/fixture/issues/1'},
             'repository':{'private':False}}]]
 elif p=='repos/example/fixture': data={'full_name':'example/fixture','private':False}
 elif p=='repos/example/fixture/issues/1':
     data={'id':1,'number':1,'title':'fixture external prose @fixture-human','state':'open','body':'fixture issue body'}
     if (Path(__file__).resolve().parents[1]/'updated').exists(): data['title'] += ' updated'
+    if (Path(__file__).resolve().parents[1]/'closed').exists(): data['state'] = 'closed'
+    if (Path(__file__).resolve().parents[1]/'metadata').exists(): data['title'] += ' metadata'
 elif p in ('repos/example/fixture/issues/1/comments?per_page=100','repos/example/fixture/issues/1/timeline?per_page=100'):
     assert a[6:]==['--paginate','--slurp']
     data=[[]]
@@ -167,13 +186,30 @@ else: sys.exit('unexpected fixture endpoint')
 print(json.dumps(data))
 ''')
         gh.chmod(0o700)
+        # Exercise the actual subprocess boundary without a live Raft write.
+        # The fixture requires the caller's environment, not the sender token.
+        raft = root / "bin/raft"
+        raft.write_text('''#!/usr/bin/env python3
+import os,sys
+from pathlib import Path
+root=Path(__file__).resolve().parents[1]
+assert os.environ.get('RAFT_EXECUTOR_FIXTURE') == 'successor'
+a=sys.argv[1:]
+assert a[:7] == ['task','update','--target','#github-work','--number','17','--status']
+assert len(a)==8 and a[7] in ('done','in_review','in_progress')
+if (root/'unread-hold').exists(): sys.exit('Read the pending human message before retrying')
+(root/'task-status').write_text(a[7])
+with (root/'status-writes').open('a') as f: f.write(a[7]+'\\n')
+print('Task status updated')
+''')
+        raft.chmod(0o700)
         env = {k: v for k, v in os.environ.items() if not k.startswith("GHRAFT_")}
         env.update(PATH=str(root / "bin") + os.pathsep + os.environ["PATH"], SSL_CERT_FILE=str(root / "tls.crt"))
         with socket.socket() as port:
             port.bind(("127.0.0.1", 0))
             db_port = port.getsockname()[1]
         base = [str(REPO / "bin/ghraft"), "init", "--dir", str(instance), "--raft-token-file", str(root / "token"),
-                "--notify", "@owner", "--db-port", str(db_port),
+                "--decision-maker", "@owner", "--db-port", str(db_port),
                 "--raft-api", f"https://127.0.0.1:{server.server_port}"]
         base += ["--database", args.database]
         base += ["--task-channel", "#github-work"] if args.delivery == "shared" else ["--recipient", "@executor"]
@@ -219,6 +255,8 @@ print(json.dumps(data))
             event = events[0]["event_id"]
             context = run(cli + ["work-context", "--event", event], parse=True)
             assert context["guide"]["mode"] == "read-only"
+            assert context["guide"]["decision_maker"] == "@owner"
+            assert json.loads((instance / "config.json").read_text())["notify_target"] == ""
             run(cli + ["deliver"])
             assert len(received) == 1
             assert run(cli + ["events"], parse=True)[0]["state"] == "accepted"
@@ -236,6 +274,20 @@ print(json.dumps(data))
                 assert run(verify + ["--executor", "@loser"], parse=True)["execute"] is False
                 declined = run(cli + ["record-triage", "--event", event, "--executor", "@loser", "--outcome", "quiet", "--reason-file", str(root / "reason")], parse=True)
                 assert declined["execute"] is False and declined["recorded"] is False
+                # A local result is not a human request. Only an actual report
+                # addressed in the original discussion may become needs-decision.
+                work_args = ["--event", event, "--executor", "@executor", "--version", context["current_version"],
+                             "--guide", context["guide"]["version"], "--task", "11111111-1111-1111-1111-111111111111"]
+                run(cli + ["link-task"] + work_args)
+                decision_args = cli + ["record-work-result"] + work_args + ["--report", "33333333-3333-4333-8333-333333333333",
+                                 "--outcome", "needs-decision", "--summary-file", str(root / "reason")]
+                run(decision_args, fail=True)
+                (root / "decision-report").write_text("`@owner` Choose the migration policy.")
+                run(decision_args, fail=True)
+                (root / "decision-report").write_text("@owner Should we keep the old API? I recommend keeping it during migration.")
+                run(decision_args)
+                run(decision_args)  # Reusing the same request never sends another mention.
+                assert len(received) == 1
             run(cli + ["record-triage", "--event", event, "--executor", "@executor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
             assert not run(cli + ["pending"], parse=True)
 
@@ -263,6 +315,48 @@ print(json.dumps(data))
                 assert run(newer_verify + ["--executor", "@successor"], parse=True)["execute"] is True
                 run(cli + ["deliver"])
                 assert len(received) == 2 and not run(cli + ["pending"], parse=True)
+
+                # A closed Issue finishes the existing task through the owner's
+                # CLI; an unread hold must not be treated as completed.
+                env["RAFT_EXECUTOR_FIXTURE"] = "successor"
+                (root / "closed").touch()
+                run(cli + ["collect"])
+                closed_event = run(cli + ["work-context", "--event", event], parse=True)["current_event_id"]
+                run(cli + ["deliver"])
+                context = run(cli + ["work-context", "--event", closed_event], parse=True)
+                def finish_args(context):
+                    return cli + ["finish-work", "--executor", "@successor", "--event", context["current_event_id"],
+                                  "--version", context["current_version"], "--guide", context["guide"]["version"],
+                                  "--task", context["discussion"]["messageId"]]
+                run(finish_args(context), fail=True)  # Delivery alone is insufficient.
+                assert not (root / "task-status").exists()
+                run(cli + ["record-triage", "--event", closed_event, "--executor", "@successor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
+                (root / "unread-hold").touch()
+                run(finish_args(context), fail=True)
+                assert not (root / "task-status").exists()
+                (root / "unread-hold").unlink()
+                assert run(finish_args(context), parse=True)["status"] == "done"
+                assert run(finish_args(context), parse=True)["status"] == "done"
+                assert (root / "status-writes").read_text().splitlines() == ["done"]
+
+                # Post-close metadata stays Done; reopening reuses that task.
+                (root / "metadata").touch()
+                run(cli + ["collect"])
+                run(cli + ["deliver"])
+                context = run(cli + ["work-context", "--event", event], parse=True)
+                run(cli + ["record-triage", "--event", context["current_event_id"], "--executor", "@successor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
+                assert (root / "task-status").read_text() == "done"
+                assert len(received) == 4 and all("target" in body for body in received[1:])
+                (root / "closed").unlink()
+                (root / "reopened").touch()
+                run(cli + ["collect"])
+                run(cli + ["deliver"])
+                assert "恢复为 in_progress" in received[-1]["content"]
+                (root / "task-status").write_text("in_progress")  # Owner reads and resumes.
+                context = run(cli + ["work-context", "--event", event], parse=True)
+                run(cli + ["record-triage", "--event", context["current_event_id"], "--executor", "@successor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
+                assert run(finish_args(context), parse=True)["status"] == "in_review"
+                assert not run(cli + ["pending"], parse=True)
 
             preview = run(cli + ["cleanup", "--dry-run"], parse=True)
             assert preview["dry_run"] and preview["history_retention_days"] == 30

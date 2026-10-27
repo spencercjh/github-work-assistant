@@ -11,6 +11,7 @@ import (
 type GitHubActionInput struct {
 	WorkInput
 	Action string `json:"action"`
+	Ref    string `json:"ref,omitempty"`
 	Head   string `json:"head"`
 	Base   string `json:"base"`
 }
@@ -30,9 +31,12 @@ func (s *Service) RequestWork(ctx context.Context, eventID, requestID, reason st
 }
 
 type GitHubActionCheck struct {
+	ExpectedRemoteHead string `json:"expected_remote_head,omitempty"`
 	GitHubActionInput
 	Repository   string `json:"repository"`
 	Number       int    `json:"number"`
+	Branch       string `json:"branch,omitempty"`
+	TargetBranch string `json:"target_branch,omitempty"`
 	Permitted    bool   `json:"permitted"`
 	Verification string `json:"verification"`
 }
@@ -50,6 +54,9 @@ func (s *Service) CheckGitHubAction(ctx context.Context, in GitHubActionInput) (
 	}
 	if !slices.Contains(w.Guide.GitHubActions, in.Action) || w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
 		return result, ErrWorkDenied
+	}
+	if w.Fork != nil {
+		return s.checkForkAction(ctx, w, in)
 	}
 	var snapshot Snapshot
 	if json.Unmarshal(w.Snapshot, &snapshot) != nil {

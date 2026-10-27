@@ -18,6 +18,13 @@ type eventSubject struct {
 }
 
 func subjectOf(s Snapshot) eventSubject {
+	if f := s.Objects["fork"]; f != nil {
+		title := str(f["target_repo"]) + " · " + str(f["target_branch"])
+		if number, ok := f["pr"].(float64); ok && number > 0 {
+			title += fmt.Sprintf(" · 同步 PR %d", int(number))
+		}
+		return eventSubject{"Fork", title}
+	}
 	if s.Objects["issue"] == nil {
 		return eventSubject{}
 	}
@@ -57,12 +64,16 @@ func noticeMarkdown(s string) string {
 }
 
 func (r *Raft) notice(ctx context.Context, ev Event) (eventNotice, error) {
+	if f, ok := r.Config.Fork(ev.Key); ok {
+		return r.forkNotice(ev, f)
+	}
 	watch, err := resourceWatch(ev.Key)
 	if err != nil {
 		return eventNotice{}, err
 	}
 	var p struct {
 		Kind           string       `json:"kind"`
+		RequestID      string       `json:"request_id"`
 		Classification string       `json:"data_classification"`
 		Subject        eventSubject `json:"subject"`
 		Changes        []Change     `json:"changes"`
@@ -88,6 +99,11 @@ func (r *Raft) notice(ctx context.Context, ev Event) (eventNotice, error) {
 	changes := describeChanges(p.Changes, p.Subject.Kind, hideMetadata, !private)
 	if p.Kind == "work.requested" {
 		changes = []noticeChange{{priority: 0, label: "请求处理", text: "部署者请求按当前仓库委托重新评估并处理此事项。这不是新的 GitHub 活动；操作范围以本机指引为准。"}}
+		if strings.HasPrefix(p.RequestID, "finish:") {
+			changes = []noticeChange{{priority: 0, label: "任务收尾", text: "GitHub 事项已结束，已有事件已处理。请原负责人读取讨论并核实收尾，使用 finish-work 完成原任务。这是状态核对请求，不是新的 GitHub 通知。"}}
+		} else if strings.HasPrefix(p.RequestID, "resume:") {
+			changes = []noticeChange{{priority: 0, label: "恢复处理", text: "GitHub 事项在任务收尾时重新打开。请原负责人读取最新讨论，恢复原任务后继续处理。这是状态核对请求，不是新的 GitHub 通知。"}}
+		}
 	}
 	subject := fmt.Sprintf("%s %s %d", watch.Repo, p.Subject.Kind, watch.Number)
 	if hideMetadata {

@@ -87,6 +87,8 @@ bin/ghraft -config config.json record-work-result \
 
 结果可为 `investigated`、`changes-ready`、`needs-decision`、`waiting` 或 `merged`。`waiting` 记录等待条件，后续事件继续由原负责人处理。`merged` 要求配置已委托 `merge`，且刷新后的 PR 快照确认 `merged=true`；它不能表示只是已请求自动合入。只读仓库不能记录 `changes-ready`。结果是 Agent 对证据和验证的上报；App 不声称独立执行了报告中的测试。已有任务关联的资源必须使用这个带版本的接口，旧 `record-result` 不能绕过检查。重复上报同一内容是幂等操作，改写已记录的报告会冲突。
 
+`needs-decision` 要求先在原讨论向 `guide.decision_maker` 提出具体问题，并以此人的裸提及开头。使用实际发送成功的消息 UUID；共享模式会核验原讨论中的消息和发送者。仅等待 CI 使用 `waiting`，同一未决问题复用已有请求。具体格式及发送失败处理见[决策请求](AGENT-WORKFLOW.md#需要用户决策时)。
+
 任务状态继续在 Raft 中更新。需要未来复查时，由负责 Agent 创建锚定原任务的 Raft reminder；交接时同步提醒责任。仓库指引可持续授权 GitHub 动作；执行前核对当前授权、归属和远端版本。程序不代理远端写入，由执行者使用 `gh` 完成并查询实际结果。配置文件变更后重启服务；本机 CLI 每次读取最新配置，指引正文每次工作操作重新读取。
 
 ## 检查持续授权并合入
@@ -105,6 +107,8 @@ bin/ghraft -config config.json check-github-action \
 符合指引后，使用仓库允许的合并方式，例如 `gh pr merge "$PR" --repo "$REPOSITORY" --squash --match-head-commit "$HEAD_SHA"`。不要使用 `--admin` 绕过规则。检查与写操作之间没有跨系统事务；交接前先停止旧执行者，合并以 GitHub 的 head 条件和保护规则为准。请求超时先查询远端状态，不盲目重复外部写入。
 
 合入后刷新快照，等新事件投递确认，以新事件和更新后的 `link-task` 记录 `merged` 结果，写明实际合并 SHA 与链接。正常检查进展无需逐条提醒用户；完成或出现具体阻塞时汇报。等待外部结果时保留原负责人，必要时使用锚定原工作的提醒。
+
+共享模式处理完本事项的全部事件后，调用 [`finish-work`](AGENT-WORKFLOW.md#自动完成共享任务)，自动将已合并或关闭的普通 PR／已关闭的 Issue 对应的固定通知任务设为 Done。参数使用最新事件、证据、指引及 `discussion.messageId`；另行关联的工程任务不随之完成。仅保存结果不会修改任务状态。
 
 ## 已有事项应用新委托
 

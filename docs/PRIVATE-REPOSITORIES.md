@@ -38,7 +38,7 @@
 ```sh
 bin/ghraft init --dir state/assistant \
   --raft-token-file /private/external-token \
-  --task-channel '#github-work' \
+  --task-channel '#github-work' --decision-maker @owner \
   --private-repositories 'example/*,another/project'
 ```
 

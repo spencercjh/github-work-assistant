@@ -25,7 +25,7 @@
 
 ```bash
 bin/ghraft init --dir state/assistant \
-  --raft-token-file /private/external-token --recipient @reviewer \
+  --raft-token-file /private/external-token --recipient @reviewer --decision-maker @owner \
   --database sqlite
 state/assistant/run migrate
 state/assistant/run doctor
@@ -45,7 +45,7 @@ assistant:REPLACE_ME@tcp(db.example.com:3306)/assistant?charset=utf8mb4&tls=true
 
 ```bash
 bin/ghraft init --dir state/assistant \
-  --raft-token-file /private/external-token --recipient @reviewer \
+  --raft-token-file /private/external-token --recipient @reviewer --decision-maker @owner \
   --database seekdb --dsn-file /private/database-dsn
 state/assistant/run migrate
 state/assistant/run doctor
@@ -65,7 +65,7 @@ postgres://assistant:REPLACE_ME@db.example.com:5432/assistant?sslmode=verify-ful
 
 ```bash
 bin/ghraft init --dir state/assistant \
-  --raft-token-file /private/external-token --recipient @reviewer \
+  --raft-token-file /private/external-token --recipient @reviewer --decision-maker @owner \
   --database postgres --dsn-file /private/database-dsn
 state/assistant/run migrate
 state/assistant/run doctor

@@ -45,6 +45,7 @@ state/assistant/run serve
 - 快照和待发事件一起持久化。发送失败保留待发状态并退避重试；完整消息请求在首次发送前保存，重启后使用相同幂等键和内容重试。
 - 执行 Agent 读取事件前后差异、最新快照和既有处理记录，避免把重复通知当作新工作。Raft 接受消息与 Agent 完成处理分别记账。
 - 配置可信仓库指引和 `github_actions` 后，执行 Agent 可自主检查、修改、验证和合入 PR。持续授权范围内不逐次请求确认；合入前检查实时归属和 head/base，合入后核对结果。未配置的仓库默认只读，GitHub 写操作由执行者通过 `gh` 完成。见[仓库操作授权](docs/REPOSITORY-WORK.md)。
+- 持续维护有定制功能的 fork：配置上游和目标分支，每轮保留上游原始提交，测试其与当前目标的合并结果；同步 PR 的评审和检查仍由原负责人跟进。见[持续维护 fork](docs/FORK-MAINTENANCE.md)。
 - 新委托可通过 `request-work` 应用于已有事项，无须等新的 GitHub 活动，也不重放归档通知。
 
 ## 运维与开发
@@ -54,6 +55,7 @@ state/assistant/run serve
 | 安装、配置、常驻运行、备份和恢复 | [快速部署](docs/QUICKSTART.md) |
 | 选择数据库、配置云数据库连接、扩展持久化实现 | [存储配置与实现](docs/STORAGE.md) |
 | 让执行 Agent 处理通知和保存结果 | [Agent 工作说明](docs/AGENT-WORKFLOW.md) |
+| 配置 fork 维护、验证定制能力与恢复中断 | [持续维护 fork](docs/FORK-MAINTENANCE.md) |
 | 仓库操作范围与本地工作命令 | [仓库工作指引](docs/REPOSITORY-WORK.md) |
 | 已有 App 部署的 OAuth／HTTPS 接入 | [App 模式参考](docs/APP-MODE.md) |
 | 本次验证的范围和限制 | [部署验证](docs/SETUP-VALIDATION.md) |

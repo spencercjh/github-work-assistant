@@ -50,6 +50,9 @@ func (s *Store) RequestWork(ctx context.Context, key, version, requestID, reason
 	if err = tx.Session(ctx).Create(&row).Error; err != nil {
 		return Event{}, err
 	}
+	if err = tx.Upsert(ctx, &metaRecord{"current-event:" + key, id}, []string{"name"}, []string{"value"}); err != nil {
+		return Event{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		return Event{}, err
 	}

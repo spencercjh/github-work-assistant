@@ -91,12 +91,21 @@ type Event struct {
 
 // A version transition gets its own event, including A->B->A. Snapshot+outbox commit together.
 func (s *Store) Observe(ctx context.Context, key string, body []byte) (string, error) {
-	v := hash(body)
-	tx, e := s.db.BeginWrite(ctx, "resource:"+key)
-	if e != nil {
-		return "", e
+	tx, err := s.db.BeginWrite(ctx, "resource:"+key)
+	if err != nil {
+		return "", err
 	}
 	defer tx.Rollback()
+	id, err := s.observeTx(ctx, tx, key, body)
+	if err != nil {
+		return "", err
+	}
+	return id, tx.Commit()
+}
+
+func (s *Store) observeTx(ctx context.Context, tx *database.Tx, key string, body []byte) (string, error) {
+	v := hash(body)
+	var e error
 	var current Snapshot
 	_ = json.Unmarshal(body, &current)
 	// Keep the restriction after a repository becomes public: historical events
@@ -121,11 +130,24 @@ func (s *Store) Observe(ctx context.Context, key string, body []byte) (string, e
 	if e != nil && !errors.Is(e, ErrNotFound) {
 		return "", e
 	}
-	if previous == v {
+	// An earlier collector exposed fork-only merge evidence on ordinary PRs.
+	// Removing that field must not notify again or invalidate existing work.
+	// Keep the original snapshot/version intact until a real change occurs.
+	comparisonBody := []byte(previousBody)
+	if current.Objects["fork"] == nil && current.Objects["pull"] != nil {
+		var old Snapshot
+		if json.Unmarshal(comparisonBody, &old) == nil && old.Objects["fork"] == nil {
+			if _, present := old.Objects["pull"]["merge_commit_sha"]; present {
+				delete(old.Objects["pull"], "merge_commit_sha")
+				comparisonBody = canonical(old)
+			}
+		}
+	}
+	if previous == v || (previous != "" && hash(comparisonBody) == v) {
 		if e = tx.Session(ctx).Model(&snapshotRecord{}).Where("resource_key = ?", key).UpdateColumn("observed_at", time.Now().Unix()).Error; e != nil {
 			return "", e
 		}
-		return "", tx.Commit()
+		return "", nil
 	}
 	nonce := make([]byte, 24)
 	if _, e = rand.Read(nonce); e != nil {
@@ -136,20 +158,23 @@ func (s *Store) Observe(ctx context.Context, key string, body []byte) (string, e
 	if classification == "private" {
 		since = s.PrivateSince
 	}
-	delta, structured := changes([]byte(previousBody), body, time.Now(), s.LookbackHours, since)
-	payload, _ := json.Marshal(map[string]any{"event_id": id, "resource_key": key, "version": v, "previous_version": previous, "first_observation": previous == "", "data_classification": classification, "subject": subjectOf(current), "changes": delta})
+	delta, structured := changes(comparisonBody, body, time.Now(), s.LookbackHours, since)
+	payload, _ := json.Marshal(map[string]any{"event_id": id, "resource_key": key, "version": v, "previous_version": previous, "first_observation": previous == "", "data_classification": classification, "subject": subjectOf(current), "github_ended": githubEnded(body), "changes": delta})
 	e = tx.Upsert(ctx, &snapshotRecord{key, v, string(body), time.Now().Unix()}, []string{"resource_key"}, []string{"version_hash", "body", "observed_at"})
 	if e != nil {
 		return "", e
 	}
 	if structured && len(delta) == 0 {
-		return "", tx.Commit()
+		return "", nil
 	}
 	e = tx.Session(ctx).Create(&eventRecord{EventID: id, ResourceKey: key, VersionHash: v, Payload: string(payload), State: "pending", CreatedAt: time.Now().Unix()}).Error
 	if e != nil {
 		return "", e
 	}
-	return id, tx.Commit()
+	if e = tx.Upsert(ctx, &metaRecord{"current-event:" + key, id}, []string{"name"}, []string{"value"}); e != nil {
+		return "", e
+	}
+	return id, nil
 }
 func (s *Store) Snapshot(ctx context.Context, key string) (json.RawMessage, string, error) {
 	var b string

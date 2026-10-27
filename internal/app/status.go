@@ -1,6 +1,10 @@
 package app
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+	"strings"
+)
 
 func (s *Store) Status(ctx context.Context) (map[string]any, error) {
 	out := map[string]any{}
@@ -24,6 +28,36 @@ func (s *Store) Status(ctx context.Context) (map[string]any, error) {
 		return nil, e
 	}
 	out["watches"] = watches
+	rows, e = s.db.QueryContext(ctx, `SELECT name,value FROM ghraft_meta WHERE name LIKE 'fork-progress:%' OR name LIKE 'fork-error:%' ORDER BY name`)
+	if e != nil {
+		return nil, e
+	}
+	forks := map[string]any{}
+	forkErrors := map[string]string{}
+	for rows.Next() {
+		var name, value string
+		if e = rows.Scan(&name, &value); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		if strings.HasPrefix(name, "fork-error:") {
+			forkErrors[strings.TrimPrefix(name, "fork-error:")] = value
+		} else {
+			var progress ForkProgress
+			if e = json.Unmarshal([]byte(value), &progress); e != nil {
+				rows.Close()
+				return nil, e
+			}
+			forks[strings.TrimPrefix(name, "fork-progress:")] = progress
+		}
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
+	out["forks"], out["fork_errors"] = forks, forkErrors
+
 	for name, q := range map[string]string{"compacted_events": `SELECT COUNT(*) FROM ghraft_events WHERE compacted_at>0`, "pending_delivery": `SELECT COUNT(*) FROM ghraft_events WHERE state='pending'`, "unprocessed": `SELECT COUNT(*) FROM ghraft_events e WHERE NOT EXISTS(SELECT 1 FROM ghraft_triage t WHERE t.event_id=e.event_id) AND NOT EXISTS(SELECT 1 FROM ghraft_results r WHERE r.event_id=e.event_id)`, "legacy_history": `SELECT COUNT(*) FROM ghraft_legacy_history`, "processed": `SELECT COUNT(*) FROM ghraft_triage`} {
 		var n int
 		if e = s.db.QueryRowContext(ctx, q).Scan(&n); e != nil {

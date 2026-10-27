@@ -21,8 +21,10 @@
   "private_notifications_since": "",
   "private_notification_details": false,
   "notify_target": "dm:@your-human",
+  "decision_maker": "@your-human",
   "lookback_hours": 6,
   "workspace_root": "state/worktrees",
+  "forks": [],
   "repositories": [
     {
       "repo": "Project-HAMi/HAMi",
