@@ -20,9 +20,10 @@ type GitHub interface {
 	Collect(context.Context, Watch) ([]byte, error)
 }
 type GH struct {
-	Login                     string
-	PrivateRepositories       []string
-	PrivateNotificationsSince string
+	Login                           string
+	PrivateRepositories             []string
+	PrivateNotificationsSince       string
+	NotificationExcludeRepositories []string
 }
 
 // gh controls GitHub credentials. No token is copied into this App or sent to Raft.

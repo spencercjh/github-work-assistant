@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,9 +19,10 @@ type BranchRef struct {
 	Branch string `json:"branch"`
 }
 type ForkSpec struct {
-	ID       string    `json:"id"`
-	Upstream BranchRef `json:"upstream"`
-	Target   BranchRef `json:"target"`
+	ID              string    `json:"id"`
+	Upstream        BranchRef `json:"upstream"`
+	Target          BranchRef `json:"target"`
+	LocalRepository string    `json:"local_repository,omitempty"`
 }
 
 var forkIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,47}$`)
@@ -54,6 +56,9 @@ func (c Config) validateForks() error {
 			return errors.New("forks require unique lowercase IDs")
 		}
 		seen[f.ID] = true
+		if f.LocalRepository != "" && (!filepath.IsAbs(f.LocalRepository) || strings.ContainsAny(f.LocalRepository, "\x00\r\n")) {
+			return errors.New("fork local_repository must be an absolute local clone path")
+		}
 		for _, ref := range []BranchRef{f.Upstream, f.Target} {
 			if !repoRE.MatchString(ref.Repo) || strings.Contains(ref.Repo, "..") || !validBranch(ref.Branch) {
 				return errors.New("invalid fork repository or branch")

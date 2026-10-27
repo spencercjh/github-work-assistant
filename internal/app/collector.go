@@ -234,6 +234,11 @@ func (g GH) notificationWatch(row map[string]any) (Watch, bool) {
 	}
 	n, _ := strconv.Atoi(m[2])
 	w := Watch{m[1], n}
+	for _, excluded := range g.NotificationExcludeRepositories {
+		if strings.EqualFold(excluded, w.Repo) {
+			return Watch{}, false
+		}
+	}
 	private, ok := obj(row["repository"])["private"].(bool)
 	if !ok || n < 1 || (private && !privateRepositoryAllowed(g.PrivateRepositories, w.Repo)) {
 		return Watch{}, false

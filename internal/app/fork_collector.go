@@ -81,10 +81,27 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 	if o.Target, err = g.branchHead(ctx, f.Target); err != nil {
 		return o, err
 	}
-	if o.ContainsLatest, err = g.containsCommit(ctx, f.Target.Repo, o.Upstream, o.Target); err != nil {
+	contains := func(ancestor, head string) (bool, error) {
+		return g.containsCommit(ctx, f.Target.Repo, ancestor, head)
+	}
+	var local *forkGitRepository
+	if f.LocalRepository != "" {
+		local, err = openForkGitRepository(ctx, f)
+		if err != nil {
+			return o, err
+		}
+		defer local.close()
+		for _, revision := range []struct{ repo, sha string }{{f.Upstream.Repo, o.Upstream}, {f.Target.Repo, o.Target}, {f.Upstream.Repo, p.Upstream}} {
+			if err = local.ensureCommit(ctx, revision.repo, revision.sha); err != nil {
+				return o, err
+			}
+		}
+		contains = func(ancestor, head string) (bool, error) { return local.contains(ctx, ancestor, head) }
+	}
+	if o.ContainsLatest, err = contains(o.Upstream, o.Target); err != nil {
 		return o, err
 	}
-	if o.ContainsPinned, err = g.containsCommit(ctx, f.Target.Repo, p.Upstream, o.Target); err != nil {
+	if o.ContainsPinned, err = contains(p.Upstream, o.Target); err != nil {
 		return o, err
 	}
 	// The deterministic per-round branch recovers a PR created before a crash,
@@ -148,15 +165,20 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 		if !shaRE.MatchString(o.MergeCommit) {
 			return o, errors.New("merged PR has no valid merge commit")
 		}
-		mergeInTarget, err := g.containsCommit(ctx, f.Target.Repo, o.MergeCommit, o.Target)
+		if local != nil {
+			if err = local.ensureCommit(ctx, f.Target.Repo, o.MergeCommit); err != nil {
+				return o, err
+			}
+		}
+		mergeInTarget, err := contains(o.MergeCommit, o.Target)
 		if err != nil {
 			return o, err
 		}
-		testedInMerge, err := g.containsCommit(ctx, f.Target.Repo, p.ValidatedHead, o.MergeCommit)
+		testedInMerge, err := contains(p.ValidatedHead, o.MergeCommit)
 		if err != nil {
 			return o, err
 		}
-		upstreamInMerge, err := g.containsCommit(ctx, f.Target.Repo, p.Upstream, o.MergeCommit)
+		upstreamInMerge, err := contains(p.Upstream, o.MergeCommit)
 		if err != nil {
 			return o, err
 		}

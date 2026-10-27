@@ -24,6 +24,17 @@ func privateRepositoryAllowed(patterns []string, repo string) bool {
 }
 
 func (c Config) validateRepositoryAccess() error {
+	excluded := map[string]bool{}
+	for _, repo := range c.NotificationExcludeRepositories {
+		key := strings.ToLower(repo)
+		if !repoRE.MatchString(key) || strings.Contains(key, "..") {
+			return errors.New("notification_exclude_repositories entries must be owner/repo")
+		}
+		if excluded[key] {
+			return errors.New("duplicate notification_exclude_repositories entry")
+		}
+		excluded[key] = true
+	}
 	seen := map[string]bool{}
 	for _, pattern := range c.PrivateRepositories {
 		key := strings.ToLower(pattern)
