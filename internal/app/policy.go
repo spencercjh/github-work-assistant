@@ -10,28 +10,38 @@ import (
 	"strings"
 )
 
+// A narrowly scoped operator grant for replacing one historical sync branch.
+// The expected old SHA must be used as an explicit force-with-lease value.
+type SyncBranchReplacement struct {
+	Branch string `json:"branch"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+}
+
 // This configuration is operator-owned. GitHub comments and PR files never populate it.
 type RepositoryPolicy struct {
-	Repo          string     `json:"repo"`
-	Goal          string     `json:"goal"`
-	Mode          string     `json:"mode"`
-	GuideFile     string     `json:"guide_file"`
-	TaskTarget    string     `json:"task_target"`
-	TestCommands  [][]string `json:"test_commands,omitempty"`
-	GitHubActions []string   `json:"github_actions,omitempty"`
+	SyncBranchReplacement *SyncBranchReplacement `json:"sync_branch_replacement,omitempty"`
+	Repo                  string                 `json:"repo"`
+	Goal                  string                 `json:"goal"`
+	Mode                  string                 `json:"mode"`
+	GuideFile             string                 `json:"guide_file"`
+	TaskTarget            string                 `json:"task_target"`
+	TestCommands          [][]string             `json:"test_commands,omitempty"`
+	GitHubActions         []string               `json:"github_actions,omitempty"`
 }
 
 type RepositoryGuide struct {
-	DecisionMaker string     `json:"decision_maker,omitempty"`
-	Repo          string     `json:"repo"`
-	Goal          string     `json:"goal"`
-	Mode          string     `json:"mode"`
-	TaskTarget    string     `json:"task_target"`
-	Text          string     `json:"text"`
-	TestCommands  [][]string `json:"test_commands"`
-	Version       string     `json:"version"`
-	GitHubWrites  string     `json:"github_writes"`
-	GitHubActions []string   `json:"github_actions"`
+	SyncBranchReplacement *SyncBranchReplacement `json:"sync_branch_replacement,omitempty"`
+	DecisionMaker         string                 `json:"decision_maker,omitempty"`
+	Repo                  string                 `json:"repo"`
+	Goal                  string                 `json:"goal"`
+	Mode                  string                 `json:"mode"`
+	TaskTarget            string                 `json:"task_target"`
+	Text                  string                 `json:"text"`
+	TestCommands          [][]string             `json:"test_commands"`
+	Version               string                 `json:"version"`
+	GitHubWrites          string                 `json:"github_writes"`
+	GitHubActions         []string               `json:"github_actions"`
 }
 
 func communityReadOnly(repo string) bool {
@@ -57,6 +67,11 @@ func (p RepositoryPolicy) validate() error {
 	}
 	if len(p.GitHubActions) > 0 && (p.Mode != "local-edit" || communityReadOnly(p.Repo)) {
 		return errors.New("GitHub delegation requires local-edit outside Project-HAMi")
+	}
+	if r := p.SyncBranchReplacement; r != nil {
+		if p.Mode != "local-edit" || !seen["push"] || communityReadOnly(p.Repo) || !validBranch(r.Branch) || !strings.HasPrefix(r.Branch, "ghraft/sync/") || !shaRE.MatchString(r.From) || !shaRE.MatchString(r.To) || r.From == r.To {
+			return errors.New("sync branch replacement requires push permission and an exact sync branch/from/to grant")
+		}
 	}
 	if !(strings.HasPrefix(p.TaskTarget, "#") || strings.HasPrefix(p.TaskTarget, "dm:@")) || strings.ContainsAny(p.TaskTarget, "\r\n\t ") || strings.Contains(strings.TrimPrefix(p.TaskTarget, "dm:"), ":") {
 		return errors.New("task_target must be a top-level Raft channel or DM")
@@ -128,6 +143,7 @@ func (c Config) RepositoryGuide(repo string) (RepositoryGuide, error) {
 		g.TaskTarget = p.TaskTarget
 		g.Text = string(b)
 		g.TestCommands = p.TestCommands
+		g.SyncBranchReplacement = p.SyncBranchReplacement
 		g.GitHubActions = append([]string{}, p.GitHubActions...)
 		slices.Sort(g.GitHubActions)
 		if len(g.GitHubActions) > 0 {

@@ -31,6 +31,7 @@ func (s *Service) RequestWork(ctx context.Context, eventID, requestID, reason st
 }
 
 type GitHubActionCheck struct {
+	ExpectedRemoteHead string `json:"expected_remote_head,omitempty"`
 	GitHubActionInput
 	Repository   string `json:"repository"`
 	Number       int    `json:"number"`

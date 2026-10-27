@@ -71,12 +71,13 @@ func (g *forkFixtureSource) CollectFork(ctx context.Context, f ForkSpec, p ForkP
 		o.PrivateRepos = []string{f.Target.Repo}
 	}
 	if p.ValidatedHead != "" && g.merged && g.mergeCommit != "" {
-		a, _ := gitLocal(ctx, g.repository, "rev-parse", p.ValidatedHead+"^{tree}")
+		a := p.ValidatedTree
 		b, _ := gitLocal(ctx, g.repository, "rev-parse", g.mergeCommit+"^{tree}")
 		o.MergeCommit = g.mergeCommit
 		_, testedErr := gitLocal(ctx, g.repository, "merge-base", "--is-ancestor", p.ValidatedHead, g.mergeCommit)
 		_, upstreamErr := gitLocal(ctx, g.repository, "merge-base", "--is-ancestor", p.Upstream, g.mergeCommit)
-		o.MergeVerified = a != "" && a == b && contains(g.mergeCommit) && testedErr == nil && upstreamErr == nil
+		parents, _ := gitLocal(ctx, g.repository, "show", "-s", "--format=%P", g.mergeCommit)
+		o.MergeVerified = p.ValidatedHead == p.Upstream && a != "" && a == b && parents == p.ValidatedBase+" "+p.ValidatedHead && contains(g.mergeCommit) && testedErr == nil && upstreamErr == nil
 	}
 	if p.Branch == g.prBranch {
 		o.SyncHead = g.remoteHead
@@ -100,20 +101,43 @@ func syntheticCommit(t *testing.T, repo, tree string, parents ...string) string 
 	body += "author Test Fixture <fixture@example.invalid> 1700000001 +0000\ncommitter Test Fixture <fixture@example.invalid> 1700000001 +0000\n\nSynthetic fork update\n"
 	return fixtureGit(t, repo, body, "hash-object", "-w", "-t", "commit", "--stdin")
 }
-func commitFixtureWorkspace(t *testing.T, path string, parents ...string) string {
+
+// Upstream scaling and fork offset changes merge textually without conflict;
+// the merged worktree must pass both suites while its source ref stays upstream.
+func cleanForkHistory(t *testing.T) (string, string, string) {
 	t.Helper()
-	fixtureGit(t, path, "", "add", ".")
-	tree := fixtureGit(t, path, "", "write-tree")
-	sha := syntheticCommit(t, path, tree, parents...)
-	fixtureGit(t, path, "", "reset", "--hard", sha)
-	return sha
+	repo, _, _ := conflictHistory(t)
+	makeCommit := func(parent string, scale, offset int) string {
+		files := map[string]string{
+			"calculator.py":   "from scale import scale\nfrom offset import offset\ndef score(x):\n    return x * scale + offset\n",
+			"scale.py":        fmt.Sprintf("scale = %d\n", scale),
+			"offset.py":       fmt.Sprintf("offset = %d\n", offset),
+			"test_base.py":    fmt.Sprintf("import unittest\nfrom calculator import score\nclass Offset(unittest.TestCase):\n    def test_offset(self): self.assertEqual(score(0), %d)\n", offset),
+			"test_feature.py": fmt.Sprintf("import unittest\nfrom calculator import score\nclass Scale(unittest.TestCase):\n    def test_scale(self): self.assertEqual(score(3)-score(0), %d)\n", scale*3),
+		}
+		var tree strings.Builder
+		for _, name := range []string{"calculator.py", "offset.py", "scale.py", "test_base.py", "test_feature.py"} {
+			blob := fixtureGit(t, repo, files[name], "hash-object", "-w", "--stdin")
+			fmt.Fprintf(&tree, "100644 blob %s\t%s\n", blob, name)
+		}
+		treeID := fixtureGit(t, repo, tree.String(), "mktree")
+		if parent == "" {
+			return syntheticCommit(t, repo, treeID)
+		}
+		return syntheticCommit(t, repo, treeID, parent)
+	}
+	ancestor := makeCommit("", 1, 1)
+	return repo, makeCommit(ancestor, 1, 2), makeCommit(ancestor, 2, 1)
 }
 
-func forkFixture(t *testing.T) (*Service, *forkFixtureSource, *taskAPI) {
+func forkFixture(t *testing.T, conflicting ...bool) (*Service, *forkFixtureSource, *taskAPI) {
 	t.Helper()
 	f := &taskAPI{owner: "worker", status: "in_progress"}
 	s, _ := sharedFixture(t, f)
-	repo, target, upstream := conflictHistory(t)
+	repo, target, upstream := cleanForkHistory(t)
+	if len(conflicting) > 0 && conflicting[0] {
+		repo, target, upstream = conflictHistory(t)
+	}
 	c := localPolicy(t, "local-edit")
 	c.Repositories[0].TaskTarget = s.Config.DeliveryTarget
 	c.Repositories[0].GitHubActions = []string{"push", "open-pr", "merge"}
@@ -172,30 +196,24 @@ func TestForkMaintenanceE2E(t *testing.T) {
 	in, work := currentForkInput(t, s)
 	firstRound, pinned := work.Fork.Round, work.Fork.Upstream
 	ws, err := s.PrepareWorkspace(ctx, in, g.repository)
-	if err != nil || len(ws.Conflicts) != 1 {
-		t.Fatal("real conflict not prepared", ws, err)
+	if err != nil || ws.Head != pinned {
+		t.Fatal("original upstream not prepared", ws, err)
 	}
-	// Text resolution that loses the fork's custom scaling must fail regression.
-	if err := os.WriteFile(filepath.Join(ws.Path, "calculator.py"), []byte("def score(x):\n    return x + 2\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	bad := commitFixtureWorkspace(t, ws.Path, work.Fork.InitialTarget, pinned)
-	if _, err = s.TestWorkspace(ctx, in); err == nil {
-		t.Fatal("lost custom behavior passed")
-	}
-	check := GitHubActionInput{WorkInput: in, Action: "push", Head: bad, Base: g.target, Ref: work.Fork.Branch}
+	check := GitHubActionInput{WorkInput: in, Action: "push", Head: pinned, Base: g.target, Ref: work.Fork.Branch}
 	if _, err = s.CheckGitHubAction(ctx, check); err == nil {
-		t.Fatal("failed regression permitted push")
+		t.Fatal("untested source permitted push")
 	}
-	if err := os.WriteFile(filepath.Join(ws.Path, "calculator.py"), []byte("def score(x):\n    return x * 2 + 2\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	good := commitFixtureWorkspace(t, ws.Path, bad)
 	verified, err := s.TestWorkspace(ctx, in)
-	if err != nil || !verified.Passed || verified.Head != good {
+	good := pinned
+	if err != nil || !verified.Passed || verified.Head != pinned || !shaRE.MatchString(verified.Tree) {
 		t.Fatal("combined custom/upstream tests failed", verified, err)
 	}
-	check.Head = good
+	if got := fixtureGit(t, ws.Path, "", "rev-parse", "HEAD"); got != pinned {
+		t.Fatal("testing changed source", got)
+	}
+	if verified.Tree == fixtureGit(t, ws.Path, "", "rev-parse", "HEAD^{tree}") {
+		t.Fatal("tested source instead of merge result")
+	}
 	if _, err = s.CheckGitHubAction(ctx, check); err != nil {
 		t.Fatal("validated push denied", err)
 	}
@@ -249,7 +267,7 @@ func TestForkMaintenanceE2E(t *testing.T) {
 		t.Fatal("tested sync merge denied", err)
 	}
 	// Remote merge contains the exact tested tree and both parent histories.
-	mergedTree := fixtureGit(t, g.repository, "", "rev-parse", good+"^{tree}")
+	mergedTree := verified.Tree
 	g.target = syntheticCommit(t, g.repository, mergedTree, g.target, good)
 	g.mergeCommit = g.target
 	g.closed, g.merged = true, true
@@ -392,6 +410,7 @@ func TestForkGHCollectorUsesExactRefsAndRecoversPR(t *testing.T) {
 	p.ValidatedHead = head
 	merge := strings.Repeat("e", 40)
 	tree := strings.Repeat("f", 40)
+	p.ValidatedTree, p.ValidatedBase = tree, base
 	obj(data["repos/example/fixture/pulls/1"])["merged"] = true
 	obj(data["repos/example/fixture/pulls/1"])["state"] = "closed"
 	obj(data["repos/example/fixture/pulls/1"])["merge_commit_sha"] = merge
@@ -399,7 +418,7 @@ func TestForkGHCollectorUsesExactRefsAndRecoversPR(t *testing.T) {
 		data["repos/example/fixture/compare/"+pair[0]+"..."+pair[1]+"?per_page=1"] = map[string]any{"status": "ahead"}
 	}
 	for _, sha := range []string{merge, head} {
-		data["repos/example/fixture/git/commits/"+sha] = map[string]any{"tree": map[string]any{"sha": tree}}
+		data["repos/example/fixture/git/commits/"+sha] = map[string]any{"tree": map[string]any{"sha": tree}, "parents": []any{map[string]any{"sha": base}, map[string]any{"sha": head}}}
 	}
 	writeFixture(t, fixture, data)
 	if o, err = gh.CollectFork(t.Context(), f, p); err != nil || !o.MergeVerified || o.MergeCommit != merge {
@@ -428,10 +447,7 @@ func testedFork(t *testing.T, actions []string) (*Service, *forkFixtureSource, W
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(ws.Path, "calculator.py"), []byte("def score(x):\n    return x * 2 + 2\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	good := commitFixtureWorkspace(t, ws.Path, w.Fork.InitialTarget, w.Fork.Upstream)
+	good := w.Fork.Upstream
 	if _, err = s.TestWorkspace(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
@@ -444,17 +460,20 @@ func testedFork(t *testing.T, actions []string) (*Service, *forkFixtureSource, W
 }
 
 func TestForkRecordsHumanMergeAndAdvancedTarget(t *testing.T) {
-	for _, scenario := range []string{"human-merge", "advanced-target", "untested-merge-tree"} {
+	for _, scenario := range []string{"human-merge", "advanced-target", "untested-merge-tree", "untested-base-same-tree"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, g, in, w, _ := testedFork(t, []string{"push", "open-pr"})
 			// Observing a human's merge grants no authority to perform one.
 			if _, err := s.CheckGitHubAction(t.Context(), GitHubActionInput{WorkInput: in, Action: "merge", Head: g.remoteHead, Base: g.target, Ref: "main"}); !errors.Is(err, ErrWorkDenied) {
 				t.Fatal("merge authorization expanded", err)
 			}
-			tree := fixtureGit(t, g.repository, "", "rev-parse", g.remoteHead+"^{tree}")
+			tree := w.Fork.ValidatedTree
 			otherTree := fixtureGit(t, g.repository, "", "rev-parse", g.target+"^{tree}")
 			if scenario == "untested-merge-tree" {
 				tree = otherTree
+			}
+			if scenario == "untested-base-same-tree" {
+				g.target = syntheticCommit(t, g.repository, otherTree, g.target)
 			}
 			g.mergeCommit = syntheticCommit(t, g.repository, tree, g.target, g.remoteHead)
 			g.target, g.closed, g.merged = g.mergeCommit, true, true
@@ -466,7 +485,7 @@ func TestForkRecordsHumanMergeAndAdvancedTarget(t *testing.T) {
 			}
 			in, _ = currentForkInput(t, s)
 			err := s.RecordWorkResult(t.Context(), WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "merged", Summary: "Observed actual merge and checked tested tree/ancestry."})
-			if scenario == "untested-merge-tree" {
+			if scenario == "untested-merge-tree" || scenario == "untested-base-same-tree" {
 				if err == nil {
 					t.Fatal("untested merge tree accepted")
 				}
@@ -503,7 +522,7 @@ func TestForkTargetMovementRequiresIntegrationAndRetest(t *testing.T) {
 	if err != nil || recovered.Path != ws.Path {
 		t.Fatal("same round workspace not recovered", err)
 	}
-	good := commitFixtureWorkspace(t, ws.Path, g.remoteHead, g.target)
+	good := w.Fork.Upstream
 	if _, err = s.TestWorkspace(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
@@ -531,16 +550,16 @@ func TestForkClosedPRRestartAndWorkspaceIntentRecovery(t *testing.T) {
 		t.Fatal("restart reused abandoned proof", next.Fork)
 	}
 	// Simulate process termination after durable intent, before git worktree add.
-	path, metadata, err := s.workspacePaths(next.Fork.Round)
+	path, metadata, err := s.forkWorkspacePaths(next.Fork.Round)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent := Workspace{WorkInput: in, Resource: "fork:custom", Repository: g.repository, Path: path, Branch: next.Fork.Branch, Head: next.Fork.InitialTarget, Base: next.Fork.Upstream}
+	intent := Workspace{WorkInput: in, Resource: "fork:custom", Repository: g.repository, Path: path, Branch: next.Fork.Branch, Head: next.Fork.Upstream, Base: next.Fork.InitialTarget}
 	if err = os.WriteFile(metadata, canonical(intent), 0600); err != nil {
 		t.Fatal(err)
 	}
 	ws, err := s.PrepareWorkspace(t.Context(), in, g.repository)
-	if err != nil || ws.Path != path || len(ws.Conflicts) == 0 {
+	if err != nil || ws.Path != path || ws.Head != next.Fork.Upstream {
 		t.Fatal("durable intent could not recover", ws, err)
 	}
 	if _, err = s.PrepareWorkspace(t.Context(), in, g.repository); err != nil {
@@ -632,6 +651,202 @@ func TestWorkspaceRefreshesEvidenceAfterRegressionCommands(t *testing.T) {
 				if err == nil || got.Passed || p.ValidatedHead != "" {
 					t.Fatal("changed or unavailable remote evidence accepted", got, p, err)
 				}
+			}
+		})
+	}
+}
+
+func TestForkRejectsConflictsModifiedSourceAndLegacyProof(t *testing.T) {
+	for _, scenario := range []string{"conflict", "test failure", "test modifies merge", "source modified", "legacy proof"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, g, _ := forkFixture(t, scenario == "conflict")
+			if scenario == "test failure" {
+				s.Config.Repositories[0].TestCommands = [][]string{{"python3", "-c", "raise SystemExit(1)"}}
+			}
+			if scenario == "test modifies merge" {
+				s.Config.Repositories[0].TestCommands = [][]string{{"python3", "-c", "open('scale.py','w').write('scale = 42\\n')"}}
+			}
+			in, w := currentForkInput(t, s)
+			oldPath, _, _ := s.workspacePaths(w.Fork.Round)
+			if err := os.MkdirAll(oldPath, 0700); err != nil {
+				t.Fatal(err)
+			}
+			oldFile := filepath.Join(oldPath, "previous-work")
+			if err := os.WriteFile(oldFile, []byte("keep"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ws, err := s.PrepareWorkspace(t.Context(), in, g.repository)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if b, err := os.ReadFile(oldFile); err != nil || string(b) != "keep" {
+				t.Fatal("old workspace was changed")
+			}
+			if scenario == "source modified" {
+				if err := os.WriteFile(filepath.Join(ws.Path, "scale.py"), []byte("scale = 42\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := s.TestWorkspace(t.Context(), in)
+			if scenario == "legacy proof" {
+				if err != nil || !got.Passed {
+					t.Fatal(err)
+				}
+				p, _ := s.Store.ForkProgress(t.Context(), w.Event.Key)
+				p.ValidatedTree = ""
+				if err := s.Store.SaveForkProgress(t.Context(), w.Event.Key, p.Revision, p, nil); err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || got.Passed {
+				t.Fatal("invalid test/source accepted", got)
+			}
+			if _, err := s.CheckGitHubAction(t.Context(), GitHubActionInput{WorkInput: in, Action: "push", Head: w.Fork.Upstream, Base: g.target, Ref: w.Fork.Branch}); err == nil {
+				t.Fatal("invalid proof permitted writing")
+			}
+			if head := fixtureGit(t, ws.Path, "", "rev-parse", "HEAD"); head != w.Fork.Upstream {
+				t.Fatal("source HEAD was rewritten")
+			}
+			entries, err := filepath.Glob(filepath.Join(s.Config.WorkspaceRoot, "fork-test-*"))
+			if err != nil || len(entries) != 0 {
+				t.Fatal("temporary test worktree leaked", entries, err)
+			}
+		})
+	}
+}
+
+func TestForkBranchReplacementRequiresExactOperatorGrant(t *testing.T) {
+	s, g, _, w, _ := testedFork(t, nil)
+	oldHead := syntheticCommit(t, g.repository, w.Fork.ValidatedTree, g.target, w.Fork.Upstream)
+	g.remoteHead = oldHead
+	if err := s.Collect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	in, _ := currentForkInput(t, s)
+	check := GitHubActionInput{WorkInput: in, Action: "push", Head: w.Fork.Upstream, Base: g.target, Ref: w.Fork.Branch}
+	if _, err := s.CheckGitHubAction(t.Context(), check); err == nil {
+		t.Fatal("ordinary push allowed history replacement")
+	}
+	for _, scenario := range []string{"wrong branch", "wrong old head", "wrong new head", "exact"} {
+		r := &SyncBranchReplacement{Branch: w.Fork.Branch, From: oldHead, To: w.Fork.Upstream}
+		switch scenario {
+		case "wrong branch":
+			r.Branch += "-other"
+		case "wrong old head":
+			r.From = strings.Repeat("a", 40)
+		case "wrong new head":
+			r.To = strings.Repeat("b", 40)
+		}
+		s.Config.Repositories[0].SyncBranchReplacement = r
+		in, _ = currentForkInput(t, s)
+		if _, err := s.TestWorkspace(t.Context(), in); err != nil {
+			t.Fatal(err)
+		}
+		check.WorkInput = in
+		got, err := s.CheckGitHubAction(t.Context(), check)
+		if scenario != "exact" {
+			if err == nil {
+				t.Fatal("inexact replacement grant accepted", scenario)
+			}
+			continue
+		}
+		if err != nil || got.ExpectedRemoteHead != oldHead {
+			t.Fatal("exact replacement did not return an explicit lease", got, err)
+		}
+	}
+	// Another writer moves the remote ref: the grant must never become a wildcard.
+	g.remoteHead = syntheticCommit(t, g.repository, w.Fork.ValidatedTree, oldHead)
+	if err := s.Collect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	check.WorkInput, _ = currentForkInput(t, s)
+	if _, err := s.CheckGitHubAction(t.Context(), check); err == nil {
+		t.Fatal("replacement accepted a changed remote ref")
+	}
+}
+
+func TestForkRestartMergedLegacyRoundWithoutAcceptingOldProof(t *testing.T) {
+	s, g, _ := forkFixture(t)
+	ctx := t.Context()
+	in, w := currentForkInput(t, s)
+	ws, err := s.PrepareWorkspace(ctx, in, g.repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPath, cleanup, err := s.forkTestWorktree(ctx, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := forkTestTree(ctx, testPath, g.target)
+	cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The old implementation pushed a tested integration commit, then the user
+	// merged it before the upgrade could record completion.
+	integration := syntheticCommit(t, g.repository, tree, g.target, w.Fork.Upstream)
+	g.pr, g.prBranch, g.remoteHead = 1, w.Fork.Branch, integration
+	g.mergeCommit = syntheticCommit(t, g.repository, tree, g.target, integration)
+	g.target, g.closed, g.merged = g.mergeCommit, true, true
+	p := *w.Fork
+	p.ValidatedHead, p.ValidatedBase, p.ValidatedGuide = integration, p.InitialTarget, in.GuideVersion
+	if err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	in, w = currentForkInput(t, s)
+	if err = s.RecordWorkResult(ctx, WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "merged", Summary: "Legacy proof must not count as current validation"}); err == nil {
+		t.Fatal("legacy proof accepted as success")
+	}
+	// Even an attempted new test cannot change the already-merged PR head.
+	if _, err = s.TestWorkspace(ctx, in); err != nil && !errors.Is(err, ErrStaleWork) {
+		t.Fatal(err)
+	}
+	in, _ = currentForkInput(t, s)
+	retired, err := s.RestartFork(ctx, in)
+	if err != nil {
+		t.Fatal("explicit legacy recovery rejected", err)
+	}
+	if retired.Phase != "restart" || retired.LastSuccess != "" {
+		t.Fatal("legacy round marked successful", retired)
+	}
+	if err = s.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Store.ForkProgress(ctx, w.Event.Key)
+	if err != nil || current.Round != p.Round || current.Phase != "restart" {
+		t.Fatal("restarted without new upstream", current, err)
+	}
+	g.upstream = syntheticCommit(t, g.repository, fixtureGit(t, g.repository, "", "rev-parse", g.upstream+"^{tree}"), g.upstream)
+	if err = s.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, next := currentForkInput(t, s)
+	if next.Fork.Round == p.Round || next.Fork.Upstream != g.upstream || next.Fork.PR != 0 || next.Fork.ValidatedTree != "" || next.Fork.LastSuccess != "" {
+		t.Fatal("legacy recovery did not release later updates without proof", next.Fork)
+	}
+}
+
+func TestForkLegacyRecoveryDoesNotBypassOrdinaryMergeVerification(t *testing.T) {
+	for _, scenario := range []string{"original-upstream-head", "upstream-missing-from-target"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, g, _ := forkFixture(t)
+			in, w := currentForkInput(t, s)
+			tree := fixtureGit(t, g.repository, "", "rev-parse", g.target+"^{tree}")
+			g.pr, g.prBranch, g.remoteHead = 1, w.Fork.Branch, w.Fork.Upstream
+			if scenario == "original-upstream-head" {
+				g.target = syntheticCommit(t, g.repository, tree, g.target, w.Fork.Upstream)
+			} else {
+				g.remoteHead = syntheticCommit(t, g.repository, tree, g.target, w.Fork.Upstream)
+			}
+			g.mergeCommit, g.closed, g.merged = g.target, true, true
+			if err := s.Collect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			in, _ = currentForkInput(t, s)
+			if _, err := s.RestartFork(t.Context(), in); err == nil {
+				t.Fatal("bypassed current merge verification")
 			}
 		})
 	}
