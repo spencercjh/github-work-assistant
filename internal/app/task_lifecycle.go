@@ -269,7 +269,10 @@ func (s *Service) ReconcileTaskCompletion(ctx context.Context) error {
 		if state.Status != "in_review" && state.Status != "done" {
 			continue
 		}
-		id, err := s.Store.Meta(ctx, "current-event:"+key, "")
+		id, err := s.Store.CurrentEvent(ctx, key, version)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			errs = append(errs, err)
 			continue

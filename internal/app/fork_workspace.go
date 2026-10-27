@@ -251,12 +251,12 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 		return result, err
 	}
 	defer os.RemoveAll(home)
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	testCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	var output limitedBuffer
 	for _, argv := range w.Guide.TestCommands {
 		fmt.Fprintf(&output, "command: %s\n", string(canonical(argv)))
-		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd := exec.CommandContext(testCtx, argv[0], argv[1:]...)
 		cmd.Dir = workspace.Path
 		cmd.WaitDelay = 5 * time.Second
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "LANG=C.UTF-8", "CI=true", "PYTHONDONTWRITEBYTECODE=1"}
@@ -282,7 +282,11 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	if after, err := gitLocal(ctx, workspace.Path, "rev-parse", "HEAD"); err != nil || after != result.Head {
 		return result, errors.New("tests changed the commit")
 	}
-	// Recheck owner, guide and evidence after running potentially slow tests.
+	// Tests may outlive the evidence freshness window. Collect again, then
+	// reject changed inputs or ownership before saving the tested revisions.
+	if _, err = s.RefreshWorkContext(ctx, in.EventID); err != nil {
+		return result, err
+	}
 	w, err = s.CheckWork(ctx, in)
 	if err != nil {
 		return result, err

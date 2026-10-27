@@ -577,3 +577,58 @@ func TestCurrentEventSurvivesRepeatedSnapshotVersions(t *testing.T) {
 		t.Fatal("request did not become current", err)
 	}
 }
+
+// Simulate crossing the evidence freshness window while regression tests run.
+// The test runner itself still executes the real fixture commands.
+type expiredTestEvidenceStore struct {
+	Persistence
+	store             *Store
+	afterInvalidation func()
+}
+
+func (s *expiredTestEvidenceStore) SaveForkProgress(ctx context.Context, key string, revision int64, p ForkProgress, result *WorkResult) error {
+	if err := s.Persistence.SaveForkProgress(ctx, key, revision, p, result); err != nil {
+		return err
+	}
+	if p.ValidatedHead == "" {
+		if _, err := s.store.db.ExecContext(ctx, `UPDATE ghraft_snapshots SET observed_at=? WHERE resource_key=?`, time.Now().Add(-11*time.Minute).Unix(), key); err != nil {
+			return err
+		}
+		if s.afterInvalidation != nil {
+			s.afterInvalidation()
+		}
+	}
+	return nil
+}
+
+func TestWorkspaceRefreshesEvidenceAfterRegressionCommands(t *testing.T) {
+	for _, scenario := range []string{"unchanged", "target moved", "access revoked"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, g, in, w, _ := testedFork(t, nil)
+			store := s.Store.(*Store)
+			s.Store = &expiredTestEvidenceStore{Persistence: store, store: store, afterInvalidation: func() {
+				switch scenario {
+				case "target moved":
+					tree := fixtureGit(t, g.repository, "", "rev-parse", g.target+"^{tree}")
+					g.target = syntheticCommit(t, g.repository, tree, g.target)
+				case "access revoked":
+					g.denied = true
+				}
+			}}
+			got, err := s.TestWorkspace(t.Context(), in)
+			p, readErr := store.ForkProgress(t.Context(), w.Event.Key)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if scenario == "unchanged" {
+				if err != nil || !got.Passed || p.ValidatedHead != got.Head || p.ValidatedBase != got.Base {
+					t.Fatal("unchanged tested inputs were not saved", got, p, err)
+				}
+			} else {
+				if err == nil || got.Passed || p.ValidatedHead != "" {
+					t.Fatal("changed or unavailable remote evidence accepted", got, p, err)
+				}
+			}
+		})
+	}
+}

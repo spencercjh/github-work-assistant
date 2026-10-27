@@ -458,3 +458,46 @@ func TestFinishForkRoundKeepsMaintenanceTaskOpen(t *testing.T) {
 		t.Fatal("merged sync PR ended long-lived maintenance")
 	}
 }
+
+func TestCompletionRecoversSnapshotsWithoutCurrentEventIndex(t *testing.T) {
+	s, f, _, in := lifecycleFixture(t, Objects{"pull": {"state": "closed", "merged": true}})
+	quietEvent(t, s, in.EventID)
+	f.status = "in_review"
+	store := s.Store.(*Store)
+	if _, err := store.db.ExecContext(t.Context(), `DELETE FROM ghraft_meta WHERE name=?`, "current-event:example/fixture#1"); err != nil {
+		t.Fatal(err)
+	}
+	// Upgrade collection sees identical content, so no new event repairs the index.
+	if err := s.collectWatch(t.Context(), s.Config.Watches[0]); err != nil {
+		t.Fatal(err)
+	}
+	w, err := store.ReadWork(t.Context(), in.EventID)
+	if err != nil || w.CurrentEventID != in.EventID {
+		t.Fatal("legacy snapshot unreadable", w, err)
+	}
+	before := len(f.updates)
+	for range 2 {
+		if err := s.Deliver(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, err := store.Meta(t.Context(), "current-event:example/fixture#1", "")
+	if err != nil || id == "" || id == in.EventID || f.creates != 1 || len(f.updates) != before+1 {
+		t.Fatal("missing or duplicated legacy completion request", id, f.creates, f.updates, err)
+	}
+	f.status = "in_progress"
+	quietEvent(t, s, id)
+	var calls []string
+	if _, err := s.FinishWork(t.Context(), lifecycleInput(t, s, id), updateFixtureTask(t, f, &calls)); err != nil {
+		t.Fatal(err)
+	}
+	if f.status != "done" {
+		t.Fatal("legacy task not completed")
+	}
+	if err := s.ReconcileTaskCompletion(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.updates) != before+1 {
+		t.Fatal("completed task woken again")
+	}
+}

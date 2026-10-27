@@ -28,6 +28,7 @@ type Persistence interface {
 	RequestWork(context.Context, string, string, string, string) (Event, error)
 	Snapshot(context.Context, string) (json.RawMessage, string, error)
 	ObservedAt(context.Context, string) (int64, error)
+	CurrentEvent(context.Context, string, string) (string, error)
 	Event(context.Context, string) (Event, error)
 	TaskLinked(context.Context, string) (bool, error)
 	Events(context.Context, bool) ([]Event, error)
