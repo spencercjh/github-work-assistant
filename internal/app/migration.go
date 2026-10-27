@@ -130,17 +130,26 @@ func (s *Store) CollectionStatus(ctx context.Context, key string, err error) err
 
 // Only the Agent judges significance; transport acceptance cannot mark processing complete.
 type Triage struct {
-	Executor  string `json:"executor,omitempty"`
-	EventID   string `json:"event_id"`
-	Outcome   string `json:"outcome"`
-	Reason    string `json:"reason"`
-	MessageID string `json:"message_id"`
-	Target    string `json:"target"`
+	Executor     string `json:"executor,omitempty"`
+	EventID      string `json:"event_id"`
+	Outcome      string `json:"outcome"`
+	Reason       string `json:"reason"`
+	MessageID    string `json:"message_id"`
+	Target       string `json:"target"`
+	SupersededBy string `json:"superseded_by,omitempty"`
+	ReportID     string `json:"report_id,omitempty"`
 }
 
 func (s *Store) RecordTriage(ctx context.Context, t Triage) error {
-	if !idRE.MatchString(t.EventID) || (t.Outcome != "quiet" && t.Outcome != "notified") || len(t.Reason) == 0 || len(t.Reason) > 8000 {
+	if !idRE.MatchString(t.EventID) || (t.Outcome != "quiet" && t.Outcome != "notified" && t.Outcome != "superseded") || len(t.Reason) == 0 || len(t.Reason) > 8000 {
 		return errors.New("invalid triage")
+	}
+	if t.Outcome == "superseded" {
+		if !agentHandleRE.MatchString(t.Executor) || !idRE.MatchString(t.SupersededBy) || !uuidRE.MatchString(t.ReportID) || t.MessageID != "" || t.Target != "" {
+			return errors.New("superseded requires your executor, a covering event and report, without a notification destination")
+		}
+	} else if t.SupersededBy != "" || t.ReportID != "" {
+		return errors.New("report coverage requires the superseded outcome")
 	}
 	if t.Outcome == "notified" && (!uuidRE.MatchString(t.MessageID) || !strings.HasPrefix(t.Target, "dm:@")) {
 		return errors.New("notified requires real DM message UUID and destination")
@@ -151,6 +160,26 @@ func (s *Store) RecordTriage(ctx context.Context, t Triage) error {
 	}
 	defer tx.Rollback()
 	b := string(canonical(t))
+	if t.Outcome == "superseded" {
+		var previous triageRecord
+		err := tx.QueryRowContext(ctx, "SELECT body,body_hash FROM ghraft_triage WHERE event_id=?", t.EventID).Scan(&previous.Body, &previous.BodyHash)
+		if err == nil {
+			fingerprint := previous.BodyHash
+			if fingerprint == "" {
+				fingerprint = hash([]byte(previous.Body))
+			}
+			if fingerprint != hash([]byte(b)) {
+				return errors.New("triage already recorded with different content")
+			}
+			return tx.Commit()
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err := verifySupersededReport(ctx, tx, t); err != nil {
+			return err
+		}
+	}
 	err = tx.Upsert(ctx, &triageRecord{EventID: t.EventID, Body: b, BodyHash: hash([]byte(b)), CreatedAt: time.Now().Unix()}, []string{"event_id"}, nil)
 	if err != nil {
 		return err

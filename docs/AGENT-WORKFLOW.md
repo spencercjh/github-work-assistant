@@ -64,6 +64,23 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 升级时需同步更新已有实例的 `EXECUTOR.md` 并告知执行者采用本流程；替换二进制不会改写该文件。已结束、事件已处理且仍处于 `in_review` 的事项，会收到一次收尾请求。该请求明确标为工作请求，不冒充新的 GitHub 通知；重试不会新建任务。
 
+## 用最新报告关联已处理的旧事件
+
+持续 fork 维护可能在执行过程中连续收到检查或评审更新。先逐条核对 `pending` 中属于同一维护事项的事件，在最新证据上保存完整的 `investigated`、`changes-ready` 或 `merged` 报告。保存新报告不会自动清除旧事件。
+
+若旧事件涉及的事项已由这份报告处理，原负责人可在 `in_progress` 状态下逐条记录覆盖关系：
+
+```bash
+"$INSTANCE/run" record-triage --event "$OLDER_EVENT_ID" \
+  --executor @your-name --outcome superseded \
+  --superseded-by "$CURRENT_EVENT_ID" --report "$SAVED_REPORT_ID" \
+  --reason-file coverage.txt
+```
+
+`coverage.txt` 应说明旧事件中的哪些变化已处理，以及它们如何对应到新报告。程序要求两条事件已投递、属于同一维护事项，报告由当前负责人保存并匹配最新证据、当前指引和关联记录。`waiting`／`needs-decision` 报告、未投递事件、显式工作请求及过期证据不能通过这条路径归档。新事件或请求到达时，需要重新核对上下文。
+
+覆盖记录保留旧事件与报告的关联，不修改既有报告、不推进上游同步位置，也不授予合入权限。已经有 `waiting` 等报告的旧事件无需补写最终结果；它们已经有处理记录。处理完剩余事件后，再以最新参数运行 `finish-work`，持续维护仍保持 `in_review`。
+
 ## External Agent 本机模式
 
 频道模式先完成上述认领和归属核对；单人 DM 模式无需竞争。取得事件 ID 后，使用部署者提供的实例入口读取事实。示例中的 `INSTANCE` 是安装目录的绝对路径：

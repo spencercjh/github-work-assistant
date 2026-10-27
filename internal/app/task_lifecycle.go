@@ -123,6 +123,9 @@ func (s *Service) FinishWork(ctx context.Context, in WorkInput, update func(cont
 		return result, err
 	}
 	if !ready {
+		if w.Fork != nil {
+			return result, errors.New("finish-work requires every event to be delivered and handled; inspect pending events for this maintenance work and explicitly record superseded when a current report covers an older event")
+		}
 		return result, errors.New("finish-work requires all delivered events to be handled and a final result; waiting is not completion")
 	}
 	result = TaskFinish{Task: root, Status: "in_review"}

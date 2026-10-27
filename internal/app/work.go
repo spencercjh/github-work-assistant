@@ -65,8 +65,14 @@ func (s *Service) RecordTriage(ctx context.Context, in Triage) error {
 	if in.Outcome == "notified" && (s.Config.NotifyTarget == "" || in.Target != s.Config.NotifyTarget) {
 		return errors.New("notification destination does not match configuration")
 	}
-	if _, err := s.WorkContext(ctx, in.EventID); err != nil {
+	w, err := s.WorkContext(ctx, in.EventID)
+	if err != nil {
 		return err
+	}
+	if in.Outcome == "superseded" {
+		if err := s.checkTriageCoverage(ctx, w, in); err != nil {
+			return err
+		}
 	}
 	return s.Store.RecordTriage(ctx, in)
 }

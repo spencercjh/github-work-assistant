@@ -170,6 +170,8 @@ work=(--event "$EVENT_ID" --executor "$EXECUTOR"
 
 处理完全部事件后按[任务收尾流程](AGENT-WORKFLOW.md#自动完成共享任务)调用 `finish-work`。同步 PR 合并只完成当前轮次，持续维护任务保持 `in_review`；后续上游变化继续使用原任务。
 
+若最新报告已处理较早的检查或评审变化，但旧事件仍在 `pending` 中，逐条阅读并用 [`superseded` 判断](AGENT-WORKFLOW.md#用最新报告关联已处理的旧事件)关联到最新报告，再收尾。不要对过期证据补写工作报告，也不要仅为清空队列将未核对事件记为 `quiet`。旧的 `waiting` 报告保留，不需要改写成最终结果。
+
 ## 分批适配有较多定制的仓库
 
 存在历史压缩合入或需要修改商业定制代码时，可由部署者在目标仓库的 `repositories` 条目设置 `"fork_sync_mode": "adapted-batches"`，并为对应规则配置完整的 `local_repository`。未设置时继续原样同步。此选项不更换规则名称、讨论或负责人，也不增加 `github_actions` 权限。已有原样同步轮次尚未推送、未创建 PR 时，可以直接开始第一批；已发布的轮次须先完成，或关闭未合入 PR 并明确 `restart-sync` 后再切换。
