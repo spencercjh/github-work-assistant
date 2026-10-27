@@ -21,6 +21,7 @@ type taskAPI struct {
 	first                                             string
 	writes, creates                                   int
 	owner, status, engineeringOwner                   string
+	ownerType                                         string
 	lostReply, forbidden, missingMember, missingTasks bool
 	updates                                           map[string]string
 	updateWrites                                      int
@@ -107,7 +108,7 @@ func (f *taskAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			encode(map[string]any{"tasks": []map[string]any{{"taskNumber": 29, "messageId": fixtureReport, "claimedByName": f.engineeringOwner, "status": "in_progress"}}})
 			return
 		}
-		encode(map[string]any{"tasks": []map[string]any{{"taskNumber": 17, "messageId": fixtureTask, "claimedByName": f.owner, "status": f.status}}})
+		encode(map[string]any{"tasks": []map[string]any{{"taskNumber": 17, "messageId": fixtureTask, "claimedByName": f.owner, "claimedByType": f.ownerType, "status": f.status}}})
 	case r.URL.Path == "/internal/agent-api/tasks/claim":
 		var body struct {
 			Executor string `json:"executor"`

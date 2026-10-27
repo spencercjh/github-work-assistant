@@ -11,7 +11,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -99,7 +101,7 @@ func run() error {
 		secret = string(b)
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
-	needsClaim := c.SharedTasks() && (command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync")
+	needsClaim := c.SharedTasks() && (command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync")
 	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || command == "adopt-discussion" || needsClaim) {
 		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
 		if err != nil {
@@ -156,7 +158,7 @@ func run() error {
 			return e
 		}
 		return err
-	case "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync":
+	case "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
@@ -230,7 +232,7 @@ func run() error {
 		}
 		return e
 	default:
-		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work, test-worktree, restart-sync")
+		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work, test-worktree, restart-sync, finish-work")
 	}
 }
 
@@ -275,6 +277,14 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 		}
 	case "restart-sync":
 		result, err = svc.RestartFork(ctx, in)
+	case "finish-work":
+		result, err = svc.FinishWork(ctx, in, func(ctx context.Context, task app.TaskDispatch, status string) error {
+			cmd := exec.CommandContext(ctx, "raft", "task", "update", "--target", task.Channel, "--number", strconv.Itoa(task.Number), "--status", status)
+			// Inherit the calling executor's identity and unread-message guard.
+			// Do not substitute the collector's shared external credential.
+			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+			return cmd.Run()
+		})
 	case "adopt-discussion":
 		result, err = svc.AdoptDiscussion(ctx, in.EventID, in.TaskID)
 	case "discussion-candidates":

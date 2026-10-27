@@ -59,6 +59,7 @@ type Persistence interface {
 	ReadWork(context.Context, string) (WorkContext, error)
 	BindTask(context.Context, string, WorkInput, string) (TaskLink, error)
 	SaveWorkResult(context.Context, string, WorkResult) error
+	CompletionReady(context.Context, string, string, bool) (bool, error)
 }
 
 var _ Persistence = (*Store)(nil)
