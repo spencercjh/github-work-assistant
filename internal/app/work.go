@@ -51,7 +51,16 @@ var ErrWorkDenied = errors.New("resource is outside current authorization")
 // destination and watch boundary as the authenticated App action.
 func (s *Service) RecordTriage(ctx context.Context, in Triage) error {
 	if err := s.VerifyClaim(ctx, in.EventID, in.Executor); err != nil {
-		return err
+		if !errors.Is(err, ErrClaimUnavailable) || in.Outcome != "quiet" {
+			return err
+		}
+		w, readErr := s.WorkContext(ctx, in.EventID)
+		if readErr != nil {
+			return readErr
+		}
+		if err := s.verifyEndedTriage(ctx, w, in.Executor); err != nil {
+			return err
+		}
 	}
 	if in.Outcome == "notified" && (s.Config.NotifyTarget == "" || in.Target != s.Config.NotifyTarget) {
 		return errors.New("notification destination does not match configuration")

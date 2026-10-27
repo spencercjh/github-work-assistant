@@ -97,6 +97,10 @@ func (s *Service) Collect(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 func (s *Service) Deliver(ctx context.Context) error {
+	var errs []error
+	if err := s.ReconcileTaskCompletion(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	events := []Event{}
 	for offset := 0; len(events) < 100; offset += 100 {
 		page, err := s.Store.EventsPage(ctx, true, offset)
@@ -115,7 +119,6 @@ func (s *Service) Deliver(ctx context.Context) error {
 			break
 		}
 	}
-	var errs []error
 	for _, ev := range events {
 		if !s.allowed(ctx, ev.Key) {
 			continue

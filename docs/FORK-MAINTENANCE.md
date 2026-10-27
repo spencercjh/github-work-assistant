@@ -145,6 +145,8 @@ work=(--event "$EVENT_ID" --executor "$EXECUTOR"
 
 仅授权创建 PR 时，由人合入后也可记录经过核验的 `merged` 事实；这不会赋予执行者合入权限。
 
+处理完全部事件后按[任务收尾流程](AGENT-WORKFLOW.md#自动完成共享任务)调用 `finish-work`。同步 PR 合并只完成当前轮次，持续维护任务保持 `in_review`；后续上游变化继续使用原任务。
+
 ## 等待与恢复
 
 | 情况 | 行为 |
