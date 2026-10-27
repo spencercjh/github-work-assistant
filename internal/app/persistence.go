@@ -16,6 +16,7 @@ var ErrNotFound = database.ErrNotFound
 type Persistence interface {
 	ForkProgress(context.Context, string) (ForkProgress, error)
 	ObserveFork(context.Context, ForkSpec, ForkProgress, ForkObservation) error
+	StartForkBatch(context.Context, ForkSpec, ForkProgress, ForkProgress, ForkObservation, string) error
 	SaveForkProgress(context.Context, string, int64, ForkProgress, *WorkResult) error
 	Close() error
 	Migrate(context.Context) error

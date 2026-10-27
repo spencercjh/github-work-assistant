@@ -20,6 +20,7 @@ type SyncBranchReplacement struct {
 
 // This configuration is operator-owned. GitHub comments and PR files never populate it.
 type RepositoryPolicy struct {
+	ForkSyncMode          string                 `json:"fork_sync_mode,omitempty"`
 	SyncBranchReplacement *SyncBranchReplacement `json:"sync_branch_replacement,omitempty"`
 	Repo                  string                 `json:"repo"`
 	Goal                  string                 `json:"goal"`
@@ -31,6 +32,7 @@ type RepositoryPolicy struct {
 }
 
 type RepositoryGuide struct {
+	ForkSyncMode          string                 `json:"fork_sync_mode,omitempty"`
 	SyncBranchReplacement *SyncBranchReplacement `json:"sync_branch_replacement,omitempty"`
 	DecisionMaker         string                 `json:"decision_maker,omitempty"`
 	Repo                  string                 `json:"repo"`
@@ -67,6 +69,9 @@ func (p RepositoryPolicy) validate() error {
 	}
 	if len(p.GitHubActions) > 0 && (p.Mode != "local-edit" || communityReadOnly(p.Repo)) {
 		return errors.New("GitHub delegation requires local-edit outside Project-HAMi")
+	}
+	if p.ForkSyncMode != "" && (p.ForkSyncMode != adaptedBatches || p.Mode != "local-edit") {
+		return errors.New("fork_sync_mode must be empty or adapted-batches with local-edit")
 	}
 	if r := p.SyncBranchReplacement; r != nil {
 		if p.Mode != "local-edit" || !seen["push"] || communityReadOnly(p.Repo) || !validBranch(r.Branch) || !strings.HasPrefix(r.Branch, "ghraft/sync/") || !shaRE.MatchString(r.From) || !shaRE.MatchString(r.To) || r.From == r.To {
@@ -143,6 +148,7 @@ func (c Config) RepositoryGuide(repo string) (RepositoryGuide, error) {
 		g.TaskTarget = p.TaskTarget
 		g.Text = string(b)
 		g.TestCommands = p.TestCommands
+		g.ForkSyncMode = p.ForkSyncMode
 		g.SyncBranchReplacement = p.SyncBranchReplacement
 		g.GitHubActions = append([]string{}, p.GitHubActions...)
 		slices.Sort(g.GitHubActions)

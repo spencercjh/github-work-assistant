@@ -77,7 +77,7 @@ func (g *forkFixtureSource) CollectFork(ctx context.Context, f ForkSpec, p ForkP
 		_, testedErr := gitLocal(ctx, g.repository, "merge-base", "--is-ancestor", p.ValidatedHead, g.mergeCommit)
 		_, upstreamErr := gitLocal(ctx, g.repository, "merge-base", "--is-ancestor", p.Upstream, g.mergeCommit)
 		parents, _ := gitLocal(ctx, g.repository, "show", "-s", "--format=%P", g.mergeCommit)
-		o.MergeVerified = p.ValidatedHead == p.Upstream && a != "" && a == b && parents == p.ValidatedBase+" "+p.ValidatedHead && contains(g.mergeCommit) && testedErr == nil && upstreamErr == nil
+		o.MergeVerified = validForkProofHead(p) && a != "" && a == b && parents == p.ValidatedBase+" "+p.ValidatedHead && contains(g.mergeCommit) && testedErr == nil && (upstreamErr == nil || p.SyncMode == adaptedBatches)
 	}
 	if p.Branch == g.prBranch {
 		o.SyncHead = g.remoteHead
@@ -132,6 +132,11 @@ func cleanForkHistory(t *testing.T) (string, string, string) {
 
 func forkFixture(t *testing.T, conflicting ...bool) (*Service, *forkFixtureSource, *taskAPI) {
 	t.Helper()
+	return forkFixtureConfigured(t, false, conflicting...)
+}
+
+func forkFixtureConfigured(t *testing.T, adapted bool, conflicting ...bool) (*Service, *forkFixtureSource, *taskAPI) {
+	t.Helper()
 	f := &taskAPI{owner: "worker", status: "in_progress"}
 	s, _ := sharedFixture(t, f)
 	repo, target, upstream := cleanForkHistory(t)
@@ -144,6 +149,10 @@ func forkFixture(t *testing.T, conflicting ...bool) (*Service, *forkFixtureSourc
 	s.Config.configDir, s.Config.WorkspaceRoot, s.Config.Repositories = c.configDir, c.WorkspaceRoot, c.Repositories
 	s.Config.Watches = nil
 	s.Config.Forks = []ForkSpec{{ID: "custom", Upstream: BranchRef{"source/fixture", "main"}, Target: BranchRef{"example/fixture", "main"}}}
+	if adapted {
+		s.Config.Forks[0].LocalRepository = repo
+		s.Config.Repositories[0].ForkSyncMode = adaptedBatches
+	}
 	s.Raft.Config = s.Config
 	g := &forkFixtureSource{repository: repo, upstream: upstream, target: target}
 	s.GH = g

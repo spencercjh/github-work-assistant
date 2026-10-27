@@ -101,7 +101,7 @@ func run() error {
 		secret = string(b)
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
-	needsClaim := c.SharedTasks() && (command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync")
+	needsClaim := c.SharedTasks() && (command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync" || command == "start-sync-batch")
 	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || command == "adopt-discussion" || needsClaim) {
 		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
 		if err != nil {
@@ -158,7 +158,7 @@ func run() error {
 			return e
 		}
 		return err
-	case "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync":
+	case "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync", "start-sync-batch":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
@@ -232,7 +232,7 @@ func run() error {
 		}
 		return e
 	default:
-		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work, test-worktree, restart-sync, finish-work")
+		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work, test-worktree, restart-sync, start-sync-batch, finish-work")
 	}
 }
 
@@ -244,6 +244,8 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	f.StringVar(&in.EvidenceVersion, "version", "", "Current evidence version")
 	f.StringVar(&in.GuideVersion, "guide", "", "Current guide version")
 	f.StringVar(&in.TaskID, "task", "", "Existing claimed Raft task root UUID")
+	after := f.String("after", "", "First batch baseline SHA; later batches resume the verified cursor")
+	count := f.Int("count", 1, "Number of oldest next upstream first-parent commits, 1..50")
 	repository := f.String("repo", "", "Existing local clone with the authorized GitHub origin")
 	report := f.String("report", "", "Actual Raft report UUID")
 	outcome := f.String("outcome", "", "investigated, changes-ready, needs-decision, waiting or merged")
@@ -274,6 +276,12 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	case "test-worktree":
 		if _, err = svc.RefreshWorkContext(ctx, in.EventID); err == nil {
 			result, err = svc.TestWorkspace(ctx, in)
+		}
+	case "start-sync-batch":
+		var body []byte
+		body, err = os.ReadFile(*reason)
+		if err == nil {
+			result, err = svc.StartForkBatch(ctx, app.ForkBatchInput{WorkInput: in, After: *after, Count: *count, Reason: string(body)})
 		}
 	case "restart-sync":
 		result, err = svc.RestartFork(ctx, in)

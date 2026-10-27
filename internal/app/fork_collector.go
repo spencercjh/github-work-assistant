@@ -160,7 +160,7 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 	// Verify the actual merge against the tested target, upstream and tree only
 	// after the corresponding PR was actually merged.
 	pull := o.Objects["pull"]
-	if pull["merged"] == true && p.ValidatedHead == p.Upstream && shaRE.MatchString(p.ValidatedTree) && pull["head"] == p.ValidatedHead {
+	if pull["merged"] == true && validForkProofHead(p) && shaRE.MatchString(p.ValidatedTree) && pull["head"] == p.ValidatedHead {
 		o.MergeCommit = str(pull["merge_commit_sha"])
 		if !shaRE.MatchString(o.MergeCommit) {
 			return o, errors.New("merged PR has no valid merge commit")
@@ -178,9 +178,12 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 		if err != nil {
 			return o, err
 		}
-		upstreamInMerge, err := contains(p.Upstream, o.MergeCommit)
-		if err != nil {
-			return o, err
+		upstreamInMerge := p.SyncMode == adaptedBatches
+		if !upstreamInMerge {
+			upstreamInMerge, err = contains(p.Upstream, o.MergeCommit)
+			if err != nil {
+				return o, err
+			}
 		}
 		mergeCommit, err := g.get(ctx, "repos/"+f.Target.Repo+"/git/commits/"+o.MergeCommit)
 		if err != nil {
