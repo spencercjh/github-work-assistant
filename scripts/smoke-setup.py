@@ -304,9 +304,13 @@ print('Task status updated')
                 assert task_owner == "executor" and task_status == "done", "collector changed task ownership/state"
                 newer_verify = cli + ["verify-claim", "--event", newer["event_id"]]
                 assert run(newer_verify + ["--executor", "@executor"], parse=True)["execute"] is False
-                task_status = "in_progress"  # The same owner reads the thread and resumes.
-                assert run(newer_verify + ["--executor", "@executor"], parse=True)["execute"] is True
-                run(cli + ["record-triage", "--event", newer["event_id"], "--executor", "@executor", "--outcome", "quiet", "--reason-file", str(root / "reason")])
+                assert "原任务保持 Done" in received[-1]["content"]
+                assert "无需调用 finish-work" in received[-1]["content"]
+                recorded = run(cli + ["record-triage", "--event", newer["event_id"], "--executor", "@executor", "--outcome", "quiet", "--reason-file", str(root / "reason")], parse=True)
+                assert recorded["recorded"] is True and task_status == "done"
+                assert not run(cli + ["pending"], parse=True)
+                run(cli + ["deliver"])
+                assert len(received) == 2 and task_status == "done", "quiet processing revived completed work"
                 task_owner = "successor"  # An explicit manual handoff of the same task.
                 task_status = "todo"  # Assignment reserves ownership without starting work.
                 assert run(newer_verify + ["--executor", "@executor"], parse=True)["execute"] is False

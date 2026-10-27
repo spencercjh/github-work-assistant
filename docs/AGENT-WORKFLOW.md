@@ -21,7 +21,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 | 网络失败、权限不足、状态不明确 | 不执行，保留错误并排查；不能解释成其他人已经接手。 |
 | 之前已由自己认领 | 重新读取任务，确认当前仍由自己负责且为 `in_progress` 后恢复。 |
 
-当原任务为 `in_review` 且出现未处理的新事件时，由原负责人先读取完整讨论，再用 `raft task update` 将同一任务恢复为 `in_progress`，随后核验归属。任务为 `done` 时，先读取 `work-context`：普通 PR/Issue 仍已结束且新增动态无需行动，原负责人直接保存 `quiet` 判断，保持 Done；GitHub 重新打开、可信 `work.requested` 请求或确需行动时才恢复同一任务。`closed` 表示停止工作，只追加变化记录，等待用户明确恢复。不能因负责人离线就改派。
+当原任务为 `in_review` 且出现未处理的新事件时，由原负责人先读取完整讨论，再用 `raft task update` 将同一任务恢复为 `in_progress`，随后核验归属。任务为 `done` 时，先读取 `work-context`：普通 PR/Issue 的新增动态无需行动时，原负责人直接保存 `quiet` 判断，保持 Done，无需调用 `finish-work`；即使 GitHub 仍打开，也不因此重开任务。GitHub 重新打开、可信 `work.requested` 请求或确需行动时才恢复同一任务。`closed` 表示停止工作，只追加变化记录，等待用户明确恢复。不能因负责人离线就改派。
 
 通过 `raft auth whoami` 确认自己的稳定名称，再运行：
 
@@ -35,7 +35,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 `work-context.discussion` 指向固定通知任务。若 `work-context.task` 还关联了工程任务，先核对其当前负责人；没有原工程任务归属时只交接新证据，不并行修改。工程命令同时校验固定通知任务和工程任务的归属。
 
-结束前读取原讨论区及 `pending` 中属于本事项的未处理事件，逐项保存判断／报告，再按下节调用 `finish-work`。`pending` 是恢复入口，不能跳过归属检查直接执行。
+结束前读取原讨论区及 `pending` 中属于本事项的未处理事件，逐项保存判断／报告。已经 Done 且本次只记录 `quiet` 时保持 Done，不调用 `finish-work`；其余情况按下节收尾。`pending` 是恢复入口，不能跳过归属检查直接执行。
 
 只有用户明确要求才更换负责人。先让原负责人停止，再由有权限的用户在同一任务上使用 `raft task assign --target '#github-work' --number "$TASK_NUMBER" --assignee @new-owner`。任务状态不因指派自动改变，接手者需要读取原讨论并恢复工作。采集程序从 Raft 读取最新归属，不维护第二份负责人名单，也不会自动 unclaim、改派或修改任务状态。根任务丢失或不可读时停止投递，不创建替代讨论区。
 

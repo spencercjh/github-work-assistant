@@ -108,7 +108,7 @@ bin/ghraft -config config.json check-github-action \
 
 合入后刷新快照，等新事件投递确认，以新事件和更新后的 `link-task` 记录 `merged` 结果，写明实际合并 SHA 与链接。正常检查进展无需逐条提醒用户；完成或出现具体阻塞时汇报。等待外部结果时保留原负责人，必要时使用锚定原工作的提醒。
 
-共享模式处理完本事项的全部事件后，调用 [`finish-work`](AGENT-WORKFLOW.md#自动完成共享任务)，自动将已合并或关闭的普通 PR／已关闭的 Issue 对应的固定通知任务设为 Done。参数使用最新事件、证据、指引及 `discussion.messageId`；另行关联的工程任务不随之完成。仅保存结果不会修改任务状态。
+共享模式下，已经 Done 且本次仅记录 `quiet` 的普通事项保持 Done，无需再次收尾。其余事项处理完全部事件后，调用 [`finish-work`](AGENT-WORKFLOW.md#自动完成共享任务)，自动将已合并或关闭的普通 PR／已关闭的 Issue 对应的固定通知任务设为 Done。参数使用最新事件、证据、指引及 `discussion.messageId`；另行关联的工程任务不随之完成。仅保存结果不会修改任务状态。
 
 ## 已有事项应用新委托
 
