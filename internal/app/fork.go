@@ -156,11 +156,19 @@ func (d WorkDefinition) Repository() string {
 	}
 	return d.Watch.Repo
 }
+
+const adaptedMergeInstruction = "Merge requires separate delegation and squash; the resulting commit's sole parent must equal the tested target, and its tree must match the test proof."
+const legacyAdaptedMergeInstruction = "Merge requires separate delegation and a merge commit whose parents and tree match the test proof."
+
 func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
+	return d.guide(c, adaptedMergeInstruction)
+}
+
+func (d WorkDefinition) guide(c Config, adaptedMerge string) (RepositoryGuide, error) {
 	g, err := c.RepositoryGuide(d.Repository())
 	if err == nil && d.Fork != nil {
 		if g.ForkSyncMode == adaptedBatches {
-			g.Text += "\n\nUse start-sync-batch to select the oldest next first-parent upstream commits after the documented baseline or verified completed batch. Prepare a separate branch from the target, port only the listed changes and preserve custom behavior. Record adaptations and already-present changes for human review; ancestry does not prove ported semantics. Test the actual adapted head merged with the current target. No upstream writes or direct target pushes; only the current sync branch and its PR. Merge requires separate delegation and a merge commit whose parents and tree match the test proof."
+			g.Text += "\n\nUse start-sync-batch to select the oldest next first-parent upstream commits after the documented baseline or verified completed batch. Prepare a separate branch from the target, port only the listed changes and preserve custom behavior. Record adaptations and already-present changes for human review; ancestry does not prove ported semantics. Test the actual adapted head merged with the current target. No upstream writes or direct target pushes; only the current sync branch and its PR. " + adaptedMerge
 			g.Text += "\nTrusted maintenance rule: " + string(canonical(d.Fork))
 		} else {
 			g.Text += "\n\nKeep the sync PR head exactly equal to the pinned upstream commit; do not add integration commits or edits. Test its temporary merge with the current target to preserve custom behavior. Conflicts or failed regressions require a decision. Merge using a merge commit only when authorized, and verify the resulting tree against the tested merge tree. Upstream is read-only. Push only the current round's sync branch; merge only its PR into the configured target. No force pushes except an exact operator sync_branch_replacement grant checked against the expected remote head.\nTrusted maintenance rule: " + string(canonical(d.Fork))

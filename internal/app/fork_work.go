@@ -101,7 +101,11 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 	default:
 		return result, ErrWorkDenied
 	}
-	return GitHubActionCheck{ExpectedRemoteHead: replacementHead, GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: f.Target.Branch, Verification: "Current owner, delegation, branch and revisions checked. Only normal fast-forward pushes are permitted unless expected_remote_head is returned under an exact operator replacement grant; then use --force-with-lease=refs/heads/<branch>:<expected_remote_head>, never an unconditional force push; merge this PR using a merge commit and expected head, without bypassing repository rules. Inspect current CI and reviews. This check performs no GitHub write."}, nil
+	mergeMethod := "a merge commit"
+	if p.SyncMode == adaptedBatches {
+		mergeMethod = "squash"
+	}
+	return GitHubActionCheck{ExpectedRemoteHead: replacementHead, GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: f.Target.Branch, Verification: "Current owner, delegation, branch and revisions checked. Only normal fast-forward pushes are permitted unless expected_remote_head is returned under an exact operator replacement grant; then use --force-with-lease=refs/heads/<branch>:<expected_remote_head>, never an unconditional force push; merge this PR using " + mergeMethod + " and expected head, without bypassing repository rules. Inspect current CI and reviews. This check performs no GitHub write."}, nil
 }
 
 func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkResult) error {
@@ -129,7 +133,7 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 	switch in.Outcome {
 	case "merged":
 		pull, facts := snapshot.Objects["pull"], forkFacts(w)
-		if pull["merged"] != true || !validForkProofHead(p) || !shaRE.MatchString(p.ValidatedTree) || pull["head"] != p.ValidatedHead || p.ValidatedGuide != in.GuideVersion || (p.SyncMode != adaptedBatches && facts["contains_pinned"] != true) || facts["contains_validated"] != true || facts["merge_verified"] != true {
+		if pull["merged"] != true || !validForkProofHead(p) || !shaRE.MatchString(p.ValidatedTree) || pull["head"] != p.ValidatedHead || !s.forkCompletionGuideMatches(w) || (p.SyncMode != adaptedBatches && (facts["contains_pinned"] != true || facts["contains_validated"] != true)) || facts["merge_verified"] != true {
 			return errors.New("sync completion requires the tested head and merge tree in the remote target, plus refreshed merged PR evidence")
 		}
 		p.LastSuccess, p.Phase, p.NextAttempt = p.Upstream, "synced", 0
@@ -144,6 +148,25 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 		p.Phase, p.NextAttempt = "needs-decision", 0
 	}
 	return s.Store.SaveForkProgress(ctx, w.Event.Key, w.Fork.Revision, p, &in)
+}
+
+// An already tested batch may have been human-squashed before the verifier was
+// upgraded. Accept only the exact previous generated merge instruction with
+// today's repository policy, tests and permissions otherwise unchanged. This
+// exception is for completion only; every write still needs the current guide.
+func (s *Service) forkCompletionGuideMatches(w WorkContext) bool {
+	if w.Fork.ValidatedGuide == w.Guide.Version {
+		return true
+	}
+	if w.Fork.SyncMode != adaptedBatches {
+		return false
+	}
+	d, err := s.Config.WorkDefinition(w.Event.Key)
+	if err != nil {
+		return false
+	}
+	previous, err := d.guide(s.Config, legacyAdaptedMergeInstruction)
+	return err == nil && w.Fork.ValidatedGuide == previous.Version
 }
 
 // Completed snapshots deliberately retain historical verification metadata
