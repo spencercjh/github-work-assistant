@@ -27,17 +27,35 @@ func explicitWork(ev Event) bool {
 	return json.Unmarshal(ev.Payload, &p) == nil && p.Kind == "work.requested"
 }
 
-func endedUpdate(w WorkContext) bool {
-	if !githubEnded(w.Snapshot) || explicitWork(w.Event) {
+// A human can finish tracking an ordinary PR/Issue while GitHub remains open.
+// The owner may acknowledge an update as quiet without gaining permission to
+// execute work. Actual reopening and explicit work requests still require the
+// owner to read the discussion and resume the existing task.
+func quietDoneUpdate(w WorkContext) bool {
+	var snapshot Snapshot
+	if json.Unmarshal(w.Snapshot, &snapshot) != nil || w.Fork != nil || snapshot.Objects["fork"] != nil {
+		return false
+	}
+	item := snapshot.Objects["pull"]
+	if item == nil {
+		item = snapshot.Objects["issue"]
+	}
+	if item["state"] != "open" && item["state"] != "closed" {
 		return false
 	}
 	var p struct {
-		Ended *bool `json:"github_ended"`
+		Kind    string   `json:"kind"`
+		Changes []Change `json:"changes"`
 	}
-	if json.Unmarshal(w.Event.Payload, &p) == nil && p.Ended != nil {
-		return *p.Ended
+	if json.Unmarshal(w.Event.Payload, &p) != nil || p.Kind != "" {
+		return false
 	}
-	return w.CurrentEventID == w.Event.ID && w.CurrentVersion == w.Event.Version
+	for _, change := range p.Changes {
+		if (change.Object == "pull" || change.Object == "issue") && obj(change.Before)["state"] == "closed" && obj(change.After)["state"] == "open" {
+			return false
+		}
+	}
+	return true
 }
 
 func finishKey(key string) string { return "task-finish:" + hash([]byte(key)) }
@@ -184,8 +202,8 @@ func sameExecutor(state taskState, executor string) bool {
 }
 
 // Quiet triage of post-completion updates does not grant execution authority.
-func (s *Service) verifyEndedTriage(ctx context.Context, w WorkContext, executor string) error {
-	if !agentHandleRE.MatchString(executor) || !endedUpdate(w) {
+func (s *Service) verifyDoneTriage(ctx context.Context, w WorkContext, executor string) error {
+	if !agentHandleRE.MatchString(executor) || !quietDoneUpdate(w) {
 		return ErrClaimUnavailable
 	}
 	root, err := s.fixedTask(ctx, w)

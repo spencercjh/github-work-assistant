@@ -58,7 +58,7 @@ func (s *Service) RecordTriage(ctx context.Context, in Triage) error {
 		if readErr != nil {
 			return readErr
 		}
-		if err := s.verifyEndedTriage(ctx, w, in.Executor); err != nil {
+		if err := s.verifyDoneTriage(ctx, w, in.Executor); err != nil {
 			return err
 		}
 	}

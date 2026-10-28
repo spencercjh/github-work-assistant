@@ -381,7 +381,7 @@ func executorGuide(root, notify, channel, decisionMaker string) string {
 
     raft task claim --target %s --number <本任务编号>
 
-认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。原任务为 in_review 且出现新事件时，由原负责人先读取新消息，再将同一任务恢复为 in_progress。原任务为 done 时，先读 work-context：普通 PR/Issue 仍已结束且新增动态无需行动，直接 record-triage --outcome quiet，保持 Done；GitHub 重新打开、可信 work.requested 请求或确需行动时才恢复同一任务。closed 表示用户停止这项工作，必须等用户明确恢复。任务归人类或负责人不在频道时，等待人工交接，不代为认领。
+认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。原任务为 in_review 且出现新事件时，由原负责人先读取新消息，再将同一任务恢复为 in_progress。原任务为 done 时，先读 work-context：普通 PR/Issue 的新增动态无需行动时，原负责人直接 record-triage --outcome quiet，保持 Done，无需调用 finish-work；即使 GitHub 仍打开，也不因此重开任务。GitHub 重新打开、可信 work.requested 请求或确需行动时才恢复同一任务。closed 表示用户停止这项工作，必须等用户明确恢复。任务归人类或负责人不在频道时，等待人工交接，不代为认领。
 
 认领后以 raft auth whoami 确认自己的稳定名称，并运行：
 
@@ -391,7 +391,7 @@ func executorGuide(root, notify, channel, decisionMaker string) string {
 
 record-triage、link-task、record-work-result、prepare-worktree、verify-worktree、test-worktree、restart-sync、check-github-action、finish-work 都要带同一个 --executor；写入前会再次核对任务归属。向用户发送消息或修改仓库前也要重新 verify-claim。已经处理的事件不重复执行。work-context.discussion 是固定通知任务，work-context.task 是可选的工程任务。已有工程任务继续由其负责人处理；未取得原工程任务归属时只交接，不并行修改。旧事件的通知回执可能指向历史任务，执行归属以 discussion 和原任务当前状态为准。
 
-结束前读取原讨论区及 pending 中属于本事项的未处理事件，逐项保存判断／报告，再用最新事件调用：
+结束前读取原讨论区及 pending 中属于本事项的未处理事件，逐项保存判断／报告。已经 Done 且本次只记录 quiet 时保持 Done，不调用 finish-work；其余情况用最新事件调用：
 
     %s finish-work --event <最新事件ID> --executor @你的名称 --version <当前证据版本> --guide <当前指引版本> --task <discussion.messageId>
 
