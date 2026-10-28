@@ -258,6 +258,7 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	request := f.String("request", "", "Operator-supplied UUID; reuse for retries of the same work request")
 	reason := f.String("reason-file", "", "UTF-8 operator work request reason")
 	summaryFile := f.String("summary-file", "", "UTF-8 file containing result summary")
+	bodyFile := f.String("body-file", "", "Proposed full PR body; required for adapted fork open-pr/edit-pr checks")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -274,7 +275,13 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 			result, err = svc.RequestWork(ctx, in.EventID, *request, string(body))
 		}
 	case "check-github-action":
-		result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base, Ref: *ref})
+		var body []byte
+		if *bodyFile != "" {
+			body, err = os.ReadFile(*bodyFile)
+		}
+		if err == nil {
+			result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base, Ref: *ref, Body: string(body)})
+		}
 	case "test-worktree":
 		if _, err = svc.RefreshWorkContext(ctx, in.EventID); err == nil {
 			result, err = svc.TestWorkspace(ctx, in)

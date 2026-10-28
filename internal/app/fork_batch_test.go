@@ -27,14 +27,13 @@ func beginAdaptedFixture(t *testing.T) (*Service, *forkFixtureSource, *taskAPI, 
 	}
 	// Model a port: identical resulting files, but only target ancestry remains.
 	tree := fixtureGit(t, g.repository, "", "merge-tree", "--write-tree", g.target, g.upstream)
-	baseTree := fixtureGit(t, g.repository, "", "rev-parse", g.target+"^{tree}")
-	prepared := syntheticCommit(t, g.repository, baseTree, g.target)
-	head := syntheticCommit(t, g.repository, tree, prepared)
+	head := mappedCommit(t, g.repository, tree, g.target, g.upstream)
 	fixtureGit(t, ws.Path, "", "reset", "--hard", head)
 	ws, err = s.VerifyWorkspace(t.Context(), in)
 	if err != nil || ws.Head != head {
 		t.Fatal(err)
 	}
+	writeMapping(t, ws.MappingFile, []ForkCommitMapping{{Upstream: g.upstream, Commit: head, Status: "ported", Reason: "Preserve custom offset while porting scale."}})
 	return s, g, api, in, w, ws
 }
 
@@ -276,11 +275,24 @@ func TestAdaptedForkClosedRoundRetriesSameRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, err := s.StartForkBatch(t.Context(), ForkBatchInput{WorkInput: in, Count: 1, Reason: "Retry explicitly retired PR"})
-	if err != nil || p.BatchAfter != w.Fork.BatchAfter || p.Upstream != w.Fork.Upstream || p.Round == w.Fork.Round || p.PR != 0 || p.ValidatedHead != "" || p.LastSuccess != "" {
+	if err != nil || p.BatchAfter != w.Fork.BatchAfter || p.Upstream != w.Fork.Upstream || p.Round == w.Fork.Round || p.PR != 0 || p.ValidatedHead != "" || p.ValidatedMapping != "" || p.ValidatedPRSection != "" || p.LastSuccess != "" {
 		t.Fatal(p, err)
 	}
 	if head := fixtureGit(t, ws.Path, "", "rev-parse", "HEAD"); head != ws.Head {
 		t.Fatal("old worktree reset")
+	}
+	in, _ = currentForkInput(t, s)
+	next, err := s.PrepareWorkspace(t.Context(), in, g.repository)
+	if err != nil || next.MappingFile == ws.MappingFile {
+		t.Fatal("retry did not get its own mapping", err)
+	}
+	oldRows, err := readForkMapping(ws.MappingFile)
+	if err != nil || len(oldRows) != 1 || oldRows[0].Commit != ws.Head {
+		t.Fatal("retry overwrote old inventory", err)
+	}
+	newRows, err := readForkMapping(next.MappingFile)
+	if err != nil || len(newRows) != 1 || newRows[0].Upstream != p.Upstream || newRows[0].Commit != "" {
+		t.Fatal("retry inherited old provenance", err)
 	}
 }
 

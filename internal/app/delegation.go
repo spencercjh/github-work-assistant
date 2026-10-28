@@ -14,6 +14,7 @@ type GitHubActionInput struct {
 	Ref    string `json:"ref,omitempty"`
 	Head   string `json:"head"`
 	Base   string `json:"base"`
+	Body   string `json:"body,omitempty"`
 }
 
 // RequestWork is an operator command: enqueue a new consideration of an already

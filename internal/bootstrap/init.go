@@ -443,6 +443,10 @@ work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha�
 
 上述源工作区规则适用于默认原样同步。guide.fork_sync_mode 为 adapted-batches 时，先记录历史起点依据，再用 start-sync-batch --after <首次起点SHA> --count 1 --reason-file <批次说明文件> 选择最早的下一批主线变更。读取新事件并关联后，prepare-worktree 创建基于目标的独立分支，允许按 batch_commits 移植并提交适配。test-worktree 绑定实际适配 HEAD、当前目标和合并树；源提交变化也须重测。初始起点不是历史同步成功证明；逐项说明移植或已存在的依据，并保留商业行为。核验人工或获准合入后才能推进成功位置；后续 start-sync-batch 省略 --after，从已核验位置继续。不能跳过未完成批次，也不能静默替换已发布的 PR。此模式不增加 GitHub 权限，详见 docs/FORK-MAINTENANCE.md。
 
+适配模式必须严格逐提交对应：每条本地移植提交只对应一条上游提交，按 batch_commits 顺序形成线性提交链，提交尾注恰好包含一条 Upstream-Commit: <完整上游SHA>。不得合并多条来源到一个提交、添加无关提交或为跳过项创建空提交。可以把多条独立移植提交放在同一 PR，集中跑整批验证。填写 prepare-worktree 返回的外部 mapping_file：每项保留 upstream，status 使用 ported/already-present/not-applicable，逐项填写 reason；只有 ported 填 commit。清单文件不加入源分支。
+
+test-worktree 会核对来源清单、提交顺序和尾注；成功返回 pr_body_file。把生成的完整来源表放入 PR 正文，保留其中每条上游链接、移植提交、跳过理由和标记。创建或编辑适配 PR 前，check-github-action 另传 --body-file <实际完整正文>；发布后核对远端正文。清单变化必须重测，已有已完成轮次的历史证明保留。除非用户明确授权其他状态，创建草稿 PR。检查只验证来源声明和 Git 对应关系，测试和人工审阅仍需核实语义。关闭后明确重试时，restart-sync 后再 start-sync-batch，保留原起点、旧工作区及报告。
+
 每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr/edit-pr 只能使用 sync_branch，merge 使用目标分支。默认只允许正常推送；精确 sync_branch_replacement 授权通过检查并返回 expected_remote_head 时，才可用显式 --force-with-lease 替换指定旧提交。默认原样同步采用 merge commit，保留原始上游历史；adapted-batches 采用 squash，核对唯一父提交等于已测试目标、文件树等于已测试结果。只配置 push/open-pr 时，由人完成合入，仍可核验结果并记录 merged。GitHub PR 已合入后，刷新并读取 current_event_id 对应的新事件，等待投递确认，重新关联版本，再保存 merged；程序按同步模式检查实际合入提交的父提交、文件树及其在目标历史中的位置。旧事件不能代表新的核验结果。
 
 若保存 merged 后已有新事件，原报告保留。先核对新事件、关联当前证据，再用新的报告 UUID 记录 merged；已同步的同一轮仍需重新查询远端并核验实际合并、测试证明、当前指引和归属，不会再次推进完成位置。之后逐条关联已核对的旧事件并 finish-work。下一批是否可选，以 fork.phase=synced 且 fork.observed_upstream_sha 不同于 fork.upstream_sha 为准；不要依赖历史快照的 next_batch_ready 标记。

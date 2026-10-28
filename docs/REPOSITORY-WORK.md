@@ -114,7 +114,7 @@ bin/ghraft -config config.json check-github-action \
 
 ## 更新已有 PR 的标题和正文
 
-完成上下文刷新与关联后，使用当前 PR 的 head/base 运行 `check-github-action --action edit-pr`。fork 维护还必须传入 `--ref <本轮同步分支>`。只有检查返回 `permitted=true` 且 `editable_fields` 为 `["title", "body"]` 时，才能更新返回的 `repository` 和 `number` 对应的原 PR。检查允许草稿 PR，拒绝已关闭或已合入的 PR。
+完成上下文刷新与关联后，使用当前 PR 的 head/base 运行 `check-github-action --action edit-pr`。fork 维护还必须传入 `--ref <本轮同步分支>`。适配模式还需当前提交、目标与指引的测试证明，并通过 `--body-file <实际完整正文>` 保留测试生成的完整上游来源表。只有检查返回 `permitted=true` 且 `editable_fields` 为 `["title", "body"]` 时，才能更新返回的 `repository` 和 `number` 对应的原 PR。检查允许草稿 PR，拒绝已关闭或已合入的 PR。
 
 ```bash
 gh pr edit "$PR_NUMBER" --repo "$REPOSITORY" \
@@ -123,7 +123,7 @@ gh pr edit "$PR_NUMBER" --repo "$REPOSITORY" \
 
 执行前再次读取原 PR 的标题、正文和提交，保留用户已有说明；并发编辑或提交变化时先重新核对，不能覆盖未经审阅的新内容。命令不提供跨系统锁，完成后须重新查询并确认写入结果。
 
-该动作不修改代码，无需重新运行项目测试，也不会生成测试证明或推进同步进度。它不能替代推送、创建 PR 或合入前的验证。修改可信配置仍会更新指引版本，旧工作参数需要刷新并重新关联；后续代码写入及合入验证继续遵守新的指引。
+该动作不修改代码，也不会生成测试证明或推进同步进度。适配模式要求已有证明仍有效，来源清单与测试时一致；仅修改表格之外的说明不必重测。它不能替代推送、创建 PR 或合入前的验证。修改可信配置仍会更新指引版本，旧工作参数需要刷新并重新关联；后续代码写入及合入验证继续遵守新的指引。
 
 ## 已有事项应用新委托
 
