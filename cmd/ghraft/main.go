@@ -130,7 +130,9 @@ func run() error {
 		var in app.Triage
 		f.StringVar(&in.Executor, "executor", "", "Your own Raft @handle; required for shared tasks")
 		f.StringVar(&in.EventID, "event", "", "Captured event ID")
-		f.StringVar(&in.Outcome, "outcome", "", "quiet or notified")
+		f.StringVar(&in.Outcome, "outcome", "", "quiet, notified or superseded")
+		f.StringVar(&in.SupersededBy, "superseded-by", "", "Latest event whose report covers this older fork event")
+		f.StringVar(&in.ReportID, "report", "", "Saved report UUID on the covering event; required for superseded")
 		reasonFile := f.String("reason-file", "", "UTF-8 file containing the evidence-based reason")
 		f.StringVar(&in.MessageID, "message", "", "Actual full notification message UUID; omit for quiet")
 		f.StringVar(&in.Target, "target", "", "Configured human DM target; omit for quiet")

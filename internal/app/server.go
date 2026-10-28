@@ -351,7 +351,11 @@ func (s *Service) Handler() http.Handler {
 		if !s.checkHTTPAccess(w, r, event.Key) {
 			return
 		}
-		if e := s.Store.RecordTriage(r.Context(), in); e != nil {
+		record := s.Store.RecordTriage
+		if in.Outcome == "superseded" {
+			record = s.RecordTriage
+		}
+		if e := record(r.Context(), in); e != nil {
 			fail(w, 409, "TRIAGE_CONFLICT")
 			return
 		}

@@ -215,7 +215,7 @@ func (s *Store) compactEvent(ctx context.Context, id string, cutoff, now int64, 
 		if fingerprint == "" {
 			fingerprint = hash([]byte(t.Body))
 		}
-		body, err := compactBody(t.Body, fingerprint, "event_id", "outcome", "message_id", "target")
+		body, err := compactBody(t.Body, fingerprint, "event_id", "outcome", "message_id", "target", "executor", "superseded_by", "report_id")
 		if err != nil {
 			return err
 		}
@@ -238,7 +238,7 @@ func (s *Store) compactEvent(ctx context.Context, id string, cutoff, now int64, 
 		if fingerprint == "" {
 			fingerprint = hash(original)
 		}
-		body, err := compactBody(string(original), fingerprint, "event_id", "evidence_version", "guide_version", "raft_task_message_id", "raft_report_message_id", "outcome")
+		body, err := compactBody(string(original), fingerprint, "event_id", "evidence_version", "guide_version", "raft_task_message_id", "raft_report_message_id", "outcome", "executor")
 		if err != nil {
 			return err
 		}

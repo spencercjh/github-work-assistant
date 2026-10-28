@@ -435,6 +435,8 @@ github_actions 中已委托的动作由你通过 gh 执行；执行前完成 lin
 
 work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha、sync_branch 和已有 pr。按可信仓库指引理解定制能力，核对上游改动对它的影响；本轮提交固定，新上游更新留到下一轮。同步 PR 的评审和检查仍属于这项维护工作，不另建任务。
 
+最新证据上的 investigated、changes-ready 或 merged 报告已处理旧事件中的事项时，先逐条阅读 pending 中同一维护事项的旧事件，再用 record-triage --event <旧事件ID> --executor @你的名称 --outcome superseded --superseded-by <最新事件ID> --report <已保存的报告UUID> --reason-file <覆盖依据文件> 记录关联。该操作要求原任务为 in_progress，最新报告属于当前负责人、当前指引和证据；不能覆盖未投递事件或显式工作请求，也不能用 waiting 或 needs-decision 作为覆盖依据。已保存的旧 waiting 报告无需改写。保留历史报告，处理完剩余事件后再 finish-work；覆盖记录不推进同步完成位置或授予合入权限。
+
 先 link-task，获取目标仓库与上游的已核验提交，然后 prepare-worktree --repo <目标仓库本地克隆>。返回的源工作区处于 detached 状态，HEAD 必须始终等于本轮上游 SHA，不添加整合提交。运行 test-worktree，程序在另一临时工作区合并当前目标和上游并测试，不生成或推送测试提交。只有 passed=true 才取得与上游、目标、合并文件树和指引绑定的证明。目标或指引变化需重测；冲突、测试失败或需要改写上游代码时请求决策。旧版工作区原样保留，旧测试证明不能沿用。prepare-worktree 和 verify-worktree 不代表测试通过。
 
 上述源工作区规则适用于默认原样同步。guide.fork_sync_mode 为 adapted-batches 时，先记录历史起点依据，再用 start-sync-batch --after <首次起点SHA> --count 1 --reason-file <批次说明文件> 选择最早的下一批主线变更。读取新事件并关联后，prepare-worktree 创建基于目标的独立分支，允许按 batch_commits 移植并提交适配。test-worktree 绑定实际适配 HEAD、当前目标和合并树；源提交变化也须重测。初始起点不是历史同步成功证明；逐项说明移植或已存在的依据，并保留商业行为。核验人工或获准合入后才能推进成功位置；后续 start-sync-batch 省略 --after，从已核验位置继续。不能跳过未完成批次，也不能静默替换已发布的 PR。此模式不增加 GitHub 权限，详见 docs/FORK-MAINTENANCE.md。
