@@ -27,7 +27,9 @@ func beginAdaptedFixture(t *testing.T) (*Service, *forkFixtureSource, *taskAPI, 
 	}
 	// Model a port: identical resulting files, but only target ancestry remains.
 	tree := fixtureGit(t, g.repository, "", "merge-tree", "--write-tree", g.target, g.upstream)
-	head := syntheticCommit(t, g.repository, tree, g.target)
+	baseTree := fixtureGit(t, g.repository, "", "rev-parse", g.target+"^{tree}")
+	prepared := syntheticCommit(t, g.repository, baseTree, g.target)
+	head := syntheticCommit(t, g.repository, tree, prepared)
 	fixtureGit(t, ws.Path, "", "reset", "--hard", head)
 	ws, err = s.VerifyWorkspace(t.Context(), in)
 	if err != nil || ws.Head != head {
@@ -63,7 +65,7 @@ func TestAdaptedForkBatchKeepsOwnerAndAdvancesOnlyAfterHumanMerge(t *testing.T) 
 	if _, err = s.StartForkBatch(t.Context(), ForkBatchInput{WorkInput: in, Count: 1, Reason: "Next batch"}); err == nil {
 		t.Fatal("unfinished published PR abandoned")
 	}
-	g.mergeCommit = syntheticCommit(t, g.repository, proof.Tree, g.target, ws.Head)
+	g.mergeCommit = syntheticCommit(t, g.repository, proof.Tree, g.target)
 	g.target, g.closed, g.merged = g.mergeCommit, true, true
 	// More upstream arrived while the old batch was being reviewed.
 	tree := fixtureGit(t, g.repository, "", "rev-parse", g.upstream+"^{tree}")
@@ -75,7 +77,7 @@ func TestAdaptedForkBatchKeepsOwnerAndAdvancesOnlyAfterHumanMerge(t *testing.T) 
 	if before.Fork.Upstream != w.Fork.Upstream || before.Fork.LastSuccess != "" {
 		t.Fatal("unverified cursor advanced")
 	}
-	if err = s.RecordWorkResult(t.Context(), WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "merged", Summary: "Human reviewed ported changes; actual merge parents and tested tree match."}); err != nil {
+	if err = s.RecordWorkResult(t.Context(), WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "merged", Summary: "Human reviewed ported changes; squash parent and tested tree match."}); err != nil {
 		t.Fatal(err)
 	}
 	reopened := openTestStore(t)
@@ -188,12 +190,14 @@ func TestAdaptedForkSelectsFirstParentOrderAndRejectsSkipping(t *testing.T) {
 }
 
 func TestAdaptedForkCollectorVerifiesActualMergeWithoutInventingUpstreamAncestry(t *testing.T) {
-	for _, scenario := range []string{"valid", "wrong parent", "wrong tree", "target advanced"} {
+	for _, scenario := range []string{"valid squash", "wrong parent", "wrong tree", "target advanced", "unreachable merge", "changed head", "new merge commit", "completed legacy merge", "legacy missing cursor", "raw squash"} {
 		t.Run(scenario, func(t *testing.T) {
 			g, fixture, f, target, upstream := independentForkFixture(t)
 			after := fixtureGit(t, f.LocalRepository, "", "rev-parse", upstream+"^")
 			tree := fixtureGit(t, f.LocalRepository, "", "merge-tree", "--write-tree", target, upstream)
-			head := syntheticCommit(t, f.LocalRepository, tree, target)
+			targetTree := fixtureGit(t, f.LocalRepository, "", "rev-parse", target+"^{tree}")
+			prepared := syntheticCommit(t, f.LocalRepository, targetTree, target)
+			head := syntheticCommit(t, f.LocalRepository, tree, prepared)
 			p := ForkProgress{SyncMode: adaptedBatches, BatchAfter: after, BatchCommits: []string{upstream}, Round: strings.Repeat("a", 64), Branch: "ghraft/sync/independent/batch", Upstream: upstream, InitialTarget: target, ValidatedHead: head, ValidatedBase: target, ValidatedTree: tree}
 			parent, mergedTree := target, tree
 			if scenario == "wrong parent" {
@@ -202,8 +206,27 @@ func TestAdaptedForkCollectorVerifiesActualMergeWithoutInventingUpstreamAncestry
 			if scenario == "wrong tree" {
 				mergedTree = fixtureGit(t, f.LocalRepository, "", "rev-parse", target+"^{tree}")
 			}
-			merge := syntheticCommit(t, f.LocalRepository, mergedTree, parent, head)
+			parents := []string{parent}
+			if scenario == "new merge commit" || strings.Contains(scenario, "legacy") {
+				parents = append(parents, head)
+			}
+			if strings.Contains(scenario, "legacy") {
+				p.Phase = "synced"
+				if scenario == "completed legacy merge" {
+					p.LastSuccess = upstream
+				}
+			}
+			if scenario == "raw squash" {
+				p.SyncMode, p.ValidatedHead, head = "", upstream, upstream
+			}
+			merge := syntheticCommit(t, f.LocalRepository, mergedTree, parents...)
 			remoteTarget := merge
+			if scenario == "unreachable merge" {
+				remoteTarget = target
+			}
+			if scenario == "changed head" {
+				head = syntheticCommit(t, f.LocalRepository, tree, head)
+			}
 			if scenario == "target advanced" {
 				remoteTarget = syntheticCommit(t, f.LocalRepository, tree, merge)
 			}
@@ -218,14 +241,18 @@ func TestAdaptedForkCollectorVerifiesActualMergeWithoutInventingUpstreamAncestry
 			pull["state"], pull["merged"], pull["merge_commit_sha"] = "closed", true, merge
 			obj(pull["head"])["sha"], obj(pull["head"])["ref"] = head, p.Branch
 			obj(pull["base"])["sha"] = remoteTarget
-			data["repos/example/fixture/git/commits/"+merge] = map[string]any{"tree": map[string]any{"sha": mergedTree}, "parents": []any{map[string]any{"sha": parent}, map[string]any{"sha": head}}}
+			apiParents := []any{}
+			for _, sha := range parents {
+				apiParents = append(apiParents, map[string]any{"sha": sha})
+			}
+			data["repos/example/fixture/git/commits/"+merge] = map[string]any{"tree": map[string]any{"sha": mergedTree}, "parents": apiParents}
 			writeFixture(t, fixture, data)
 			o, err := g.CollectFork(t.Context(), f, p)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := scenario == "valid" || scenario == "target advanced"
-			if o.MergeVerified != want || o.ContainsPinned {
+			want := scenario == "valid squash" || scenario == "target advanced" || scenario == "completed legacy merge"
+			if o.MergeVerified != want || o.ContainsPinned || (len(parents) == 1 && o.ContainsValidated) {
 				t.Fatal("wrong merge proof or fabricated upstream ancestry", o)
 			}
 		})

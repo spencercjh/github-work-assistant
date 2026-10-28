@@ -169,6 +169,9 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 			if err = local.ensureCommit(ctx, f.Target.Repo, o.MergeCommit); err != nil {
 				return o, err
 			}
+			if err = local.ensureCommit(ctx, f.Target.Repo, p.ValidatedHead); err != nil {
+				return o, err
+			}
 		}
 		mergeInTarget, err := contains(o.MergeCommit, o.Target)
 		if err != nil {
@@ -196,7 +199,16 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 		parents, _ := mergeCommit["parents"].([]any)
 		parentsMatch := len(parents) == 2 && str(obj(parents[0])["sha"]) == p.ValidatedBase && str(obj(parents[1])["sha"]) == p.ValidatedHead
 		o.ContainsValidated = mergeInTarget && testedInMerge
-		o.MergeVerified = mergeInTarget && testedInMerge && upstreamInMerge && parentsMatch && tree == p.ValidatedTree
+		historyMatches := parentsMatch && testedInMerge && upstreamInMerge
+		if p.SyncMode == adaptedBatches {
+			// Squash preserves the tested result, not the adapted branch's ancestry.
+			// Previously completed merge commits remain verifiable, but cannot be
+			// used to complete a new adapted batch under the squash policy.
+			squash := len(parents) == 1 && str(obj(parents[0])["sha"]) == p.ValidatedBase
+			completedMerge := p.Phase == "synced" && p.LastSuccess == p.Upstream && historyMatches
+			historyMatches = squash || completedMerge
+		}
+		o.MergeVerified = mergeInTarget && historyMatches && tree == p.ValidatedTree
 	}
 	// Pin all fetched facts to one target revision; CI/reviews are already
 	// protected against moving PR heads by the ordinary PR collector.

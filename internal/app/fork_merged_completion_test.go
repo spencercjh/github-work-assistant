@@ -23,7 +23,7 @@ func mergedAdaptedFixture(t *testing.T) (*Service, *forkFixtureSource, *taskAPI,
 	if err = s.RecordWorkResult(t.Context(), WorkResult{WorkInput: old, ReportID: fixtureReport, Outcome: "waiting", Summary: "Await human review"}); err != nil {
 		t.Fatal(err)
 	}
-	g.mergeCommit = syntheticCommit(t, g.repository, proof.Tree, g.target, ws.Head)
+	g.mergeCommit = syntheticCommit(t, g.repository, proof.Tree, g.target)
 	g.target, g.closed, g.merged = g.mergeCommit, true, true
 	tree := fixtureGit(t, g.repository, "", "rev-parse", g.upstream+"^{tree}")
 	g.upstream = syntheticCommit(t, g.repository, tree, g.upstream)

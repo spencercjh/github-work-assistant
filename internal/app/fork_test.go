@@ -77,7 +77,11 @@ func (g *forkFixtureSource) CollectFork(ctx context.Context, f ForkSpec, p ForkP
 		_, testedErr := gitLocal(ctx, g.repository, "merge-base", "--is-ancestor", p.ValidatedHead, g.mergeCommit)
 		_, upstreamErr := gitLocal(ctx, g.repository, "merge-base", "--is-ancestor", p.Upstream, g.mergeCommit)
 		parents, _ := gitLocal(ctx, g.repository, "show", "-s", "--format=%P", g.mergeCommit)
-		o.MergeVerified = validForkProofHead(p) && a != "" && a == b && parents == p.ValidatedBase+" "+p.ValidatedHead && contains(g.mergeCommit) && testedErr == nil && (upstreamErr == nil || p.SyncMode == adaptedBatches)
+		history := parents == p.ValidatedBase+" "+p.ValidatedHead && testedErr == nil && (upstreamErr == nil || p.SyncMode == adaptedBatches)
+		if p.SyncMode == adaptedBatches {
+			history = parents == p.ValidatedBase || (p.Phase == "synced" && p.LastSuccess == p.Upstream && history)
+		}
+		o.MergeVerified = validForkProofHead(p) && g.remoteHead == p.ValidatedHead && a != "" && a == b && history && contains(g.mergeCommit)
 	}
 	if p.Branch == g.prBranch {
 		o.SyncHead = g.remoteHead
