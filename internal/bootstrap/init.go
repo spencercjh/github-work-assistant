@@ -419,6 +419,8 @@ finish-work 会刷新 GitHub 状态，核对全部事件已经送达并处理，
 
 github_actions 中已委托的动作由你通过 gh 执行；执行前完成 link-task，再运行 check-github-action，带上 --action、--event、--executor、--version、--guide、--task，以及 PR 的 --head 和 --base。只有 permitted=true 才通过该检查；execute=false 是无权执行。检查只确认授权、归属和版本，合入质量仍由你判断。合入使用 gh pr merge --match-head-commit <已核验SHA> 和仓库允许的方式，不用 --admin 绕过规则。范围外动作或无法判断的业务取舍，才向用户提出具体问题。
 
+已有 PR 的标题或正文需要更新时，必须单独配置 edit-pr 并运行 check-github-action --action edit-pr；open-pr 只用于创建。该检查要求原 PR 仍打开、归属和 head/base 当前有效，返回 editable_fields=["title","body"]；只用 gh pr edit --title/--body-file 更新返回的仓库与 PR 编号，不修改目标分支、标签、审阅者或状态，也不授予合入权限。更新前重读原文并保留用户说明，完成后核验远端结果。纯文字更新无需重新测试代码，不生成测试证明或推进维护进度。
+
 操作后查询 GitHub 实际结果。调用超时先查远端是否已成功，不盲目重发评论或推送；合入后刷新上下文，以已合入的新事件和证据记录 merged，附实际合并 SHA/链接。已排队自动合入不等于已合入。record-work-result 保存结果及证据版本；waiting 不代表已经完成。简单、无需动作的通知才使用 record-triage 的 quiet 或 notified；后者须先真正发送通知，再保存消息 UUID 和配置的目标。检查成功或机器人回复不必逐条提醒用户，只汇报完成结果、具体阻塞或需要决定的事项。pending 可列出尚未判断的事件。完整命令见仓库 docs/AGENT-WORKFLOW.md。
 
 ## 需要用户决策时
@@ -441,7 +443,7 @@ work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha�
 
 上述源工作区规则适用于默认原样同步。guide.fork_sync_mode 为 adapted-batches 时，先记录历史起点依据，再用 start-sync-batch --after <首次起点SHA> --count 1 --reason-file <批次说明文件> 选择最早的下一批主线变更。读取新事件并关联后，prepare-worktree 创建基于目标的独立分支，允许按 batch_commits 移植并提交适配。test-worktree 绑定实际适配 HEAD、当前目标和合并树；源提交变化也须重测。初始起点不是历史同步成功证明；逐项说明移植或已存在的依据，并保留商业行为。核验人工或获准合入后才能推进成功位置；后续 start-sync-batch 省略 --after，从已核验位置继续。不能跳过未完成批次，也不能静默替换已发布的 PR。此模式不增加 GitHub 权限，详见 docs/FORK-MAINTENANCE.md。
 
-每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr 只能使用 sync_branch，merge 使用目标分支。默认只允许正常推送；精确 sync_branch_replacement 授权通过检查并返回 expected_remote_head 时，才可用显式 --force-with-lease 替换指定旧提交。PR 必须采用 merge commit。只配置 push/open-pr 时，由人完成合入，仍可核验结果并记录 merged。GitHub PR 已合入后，刷新并读取 current_event_id 对应的新事件，等待投递确认，重新关联版本，再保存 merged；程序检查实际合并提交的树和祖先关系。旧事件不能代表新的核验结果。
+每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr/edit-pr 只能使用 sync_branch，merge 使用目标分支。默认只允许正常推送；精确 sync_branch_replacement 授权通过检查并返回 expected_remote_head 时，才可用显式 --force-with-lease 替换指定旧提交。PR 必须采用 merge commit。只配置 push/open-pr 时，由人完成合入，仍可核验结果并记录 merged。GitHub PR 已合入后，刷新并读取 current_event_id 对应的新事件，等待投递确认，重新关联版本，再保存 merged；程序检查实际合并提交的树和祖先关系。旧事件不能代表新的核验结果。
 
 waiting 保存等待条件，needs-decision 保存必须由人决定的具体问题；不可用 quiet 代替维护结果。处理超时会有限次唤醒原负责人，不交给其他执行者。PR 被关闭但未合入时先解释原因；只有决定重试后才 restart-sync，新轮次不继承旧测试证据。详细配置、操作和恢复方法见仓库 docs/FORK-MAINTENANCE.md。
 
