@@ -84,7 +84,7 @@ func TestAdaptedForkBatchKeepsOwnerAndAdvancesOnlyAfterHumanMerge(t *testing.T) 
 		t.Fatal(err)
 	}
 	in, done := currentForkInput(t, s)
-	if done.Fork.Phase != "synced" || done.Fork.LastSuccess != w.Fork.Upstream || done.Fork.Round != w.Fork.Round || forkFacts(done)["next_batch_ready"] != true {
+	if done.Fork.Phase != "synced" || done.Fork.LastSuccess != w.Fork.Upstream || done.Fork.Round != w.Fork.Round || done.Fork.ObservedUpstream != g.upstream {
 		t.Fatal(done.Fork)
 	}
 	if _, err = s.StartForkBatch(t.Context(), ForkBatchInput{WorkInput: in, After: g.upstream, Count: 1, Reason: "Skip ahead"}); err == nil {
