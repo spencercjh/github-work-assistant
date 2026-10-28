@@ -252,7 +252,7 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	report := f.String("report", "", "Actual Raft report UUID")
 	outcome := f.String("outcome", "", "investigated, changes-ready, needs-decision, waiting or merged")
 	ref := f.String("ref", "", "Exact write branch for fork maintenance")
-	action := f.String("action", "", "Delegated GitHub action to check")
+	action := f.String("action", "", "Delegated GitHub action; edit-pr checks title/body updates only")
 	head := f.String("head", "", "Reviewed PR head SHA")
 	base := f.String("base", "", "Reviewed PR base SHA")
 	request := f.String("request", "", "Operator-supplied UUID; reuse for retries of the same work request")

@@ -33,12 +33,13 @@ func (s *Service) RequestWork(ctx context.Context, eventID, requestID, reason st
 type GitHubActionCheck struct {
 	ExpectedRemoteHead string `json:"expected_remote_head,omitempty"`
 	GitHubActionInput
-	Repository   string `json:"repository"`
-	Number       int    `json:"number"`
-	Branch       string `json:"branch,omitempty"`
-	TargetBranch string `json:"target_branch,omitempty"`
-	Permitted    bool   `json:"permitted"`
-	Verification string `json:"verification"`
+	Repository     string   `json:"repository"`
+	Number         int      `json:"number"`
+	Branch         string   `json:"branch,omitempty"`
+	TargetBranch   string   `json:"target_branch,omitempty"`
+	EditableFields []string `json:"editable_fields,omitempty"`
+	Permitted      bool     `json:"permitted"`
+	Verification   string   `json:"verification"`
 }
 
 // This is a fresh authorization/revision check, not a merge decision or a write
@@ -69,9 +70,19 @@ func (s *Service) CheckGitHubAction(ctx context.Context, in GitHubActionInput) (
 		if in.Action == "merge" && (pull["state"] != "open" || pull["merged"] == true || pull["draft"] != false) {
 			return result, errors.New("merge requires an open non-draft PR")
 		}
-	} else if in.Action == "merge" || in.Action == "review" || in.Head != "" || in.Base != "" {
+		if in.Action == "edit-pr" && (pull["state"] != "open" || pull["merged"] != false) {
+			return result, errors.New("metadata updates require an open PR")
+		}
+	} else if in.Action == "merge" || in.Action == "review" || in.Action == "edit-pr" || in.Head != "" || in.Base != "" {
 		return result, errors.New("action requires a PR with captured revisions")
 	}
 	watch, _ := resourceWatch(w.Event.Key)
+	if in.Action == "edit-pr" {
+		return prMetadataCheck(in, watch.Repo, watch.Number), nil
+	}
 	return GitHubActionCheck{GitHubActionInput: in, Repository: watch.Repo, Number: watch.Number, Permitted: true, Verification: "Current delegation, task ownership and revisions checked. The executor must assess the guide's conditions, diff, latest checks and review discussions. Use gh with expected head for merging, never bypass branch rules, then verify the remote outcome. This check performs no GitHub write."}, nil
+}
+
+func prMetadataCheck(in GitHubActionInput, repo string, number int) GitHubActionCheck {
+	return GitHubActionCheck{GitHubActionInput: in, Repository: repo, Number: number, Permitted: true, EditableFields: []string{"title", "body"}, Verification: "Current delegation, owner and open PR revisions checked. Only update this PR's title and body with gh pr edit --title/--body-file. No branch, label, reviewer, state or merge changes are authorized. Re-read the PR before writing to avoid overwriting another editor, then verify the remote result. This check performs no GitHub write and is not test or merge approval."}
 }

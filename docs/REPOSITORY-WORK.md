@@ -22,7 +22,9 @@ Go 服务提供 GitHub 事实、受控的仓库指引和工作记录。Raft 负�
 
 这是 `repositories` 数组中的一项，不能替代完整服务配置。`guide_file` 相对于配置文件目录；不允许越界路径或指向目录外的符号链接。文件大小为 1–65536 字节。目标仓库 checkout 与管理员配置应分开放置。
 
-`mode` 支持 `read-only` 和 `local-edit`。未配置的仓库默认只读，`local-edit` 必须配置项目测试命令。本地编辑权限与远端写权限分别配置。`github_actions` 可包含 `comment`、`review`、`push`、`open-pr`、`merge`、`close`；仅在 `local-edit` 下有效，缺省为空。列表声明持续委托的动作，指引正文说明适用 PR、完成条件和例外。Agent 在该范围内直接执行，不逐次询问；列表外动作仍需单独授权。Project-HAMi 必须为 `read-only` 且不能配置写动作。参考 [依赖 PR 自主处理示例](../examples/guides/dependency-pr.md)、[通用指引](../examples/guides/repository.md) 和 [Project-HAMi 指引](../examples/guides/project-hami.md)。
+`mode` 支持 `read-only` 和 `local-edit`。未配置的仓库默认只读，`local-edit` 必须配置项目测试命令。本地编辑权限与远端写权限分别配置。`github_actions` 可包含 `comment`、`review`、`push`、`open-pr`、`edit-pr`、`merge`、`close`；仅在 `local-edit` 下有效，缺省为空。列表声明持续委托的动作，指引正文说明适用 PR、完成条件和例外。Agent 在该范围内直接执行，不逐次询问；列表外动作仍需单独授权。Project-HAMi 必须为 `read-only` 且不能配置写动作。参考 [依赖 PR 自主处理示例](../examples/guides/dependency-pr.md)、[通用指引](../examples/guides/repository.md) 和 [Project-HAMi 指引](../examples/guides/project-hami.md)。
+
+`edit-pr` 只授权修改已打开 PR 的标题和正文，不包含目标分支、标签、审阅者、状态或合入操作，也不适用于 Issue。`open-pr` 不隐含此权限；需要更新已有 PR 时，在对应仓库的 `github_actions` 中单独配置 `edit-pr`，并在可信指引中限定适用范围。
 
 每次工作操作重新读取指引。版本哈希覆盖目标、操作范围、目标会话、指引正文和测试命令；任一项变化都使旧工作参数失效。报告保存当时的指引版本；本地不再为每份报告保存指引正文。需要复核历史指引时，须使用部署者保留的文件版本。
 
@@ -109,6 +111,19 @@ bin/ghraft -config config.json check-github-action \
 合入后刷新快照，等新事件投递确认，以新事件和更新后的 `link-task` 记录 `merged` 结果，写明实际合并 SHA 与链接。正常检查进展无需逐条提醒用户；完成或出现具体阻塞时汇报。等待外部结果时保留原负责人，必要时使用锚定原工作的提醒。
 
 共享模式下，已经 Done 且本次仅记录 `quiet` 的普通事项保持 Done，无需再次收尾。其余事项处理完全部事件后，调用 [`finish-work`](AGENT-WORKFLOW.md#自动完成共享任务)，自动将已合并或关闭的普通 PR／已关闭的 Issue 对应的固定通知任务设为 Done。参数使用最新事件、证据、指引及 `discussion.messageId`；另行关联的工程任务不随之完成。仅保存结果不会修改任务状态。
+
+## 更新已有 PR 的标题和正文
+
+完成上下文刷新与关联后，使用当前 PR 的 head/base 运行 `check-github-action --action edit-pr`。fork 维护还必须传入 `--ref <本轮同步分支>`。只有检查返回 `permitted=true` 且 `editable_fields` 为 `["title", "body"]` 时，才能更新返回的 `repository` 和 `number` 对应的原 PR。检查允许草稿 PR，拒绝已关闭或已合入的 PR。
+
+```bash
+gh pr edit "$PR_NUMBER" --repo "$REPOSITORY" \
+  --title "$PR_TITLE" --body-file pr-body.md
+```
+
+执行前再次读取原 PR 的标题、正文和提交，保留用户已有说明；并发编辑或提交变化时先重新核对，不能覆盖未经审阅的新内容。命令不提供跨系统锁，完成后须重新查询并确认写入结果。
+
+该动作不修改代码，无需重新运行项目测试，也不会生成测试证明或推进同步进度。它不能替代推送、创建 PR 或合入前的验证。修改可信配置仍会更新指引版本，旧工作参数需要刷新并重新关联；后续代码写入及合入验证继续遵守新的指引。
 
 ## 已有事项应用新委托
 
