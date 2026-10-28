@@ -9,7 +9,7 @@ import (
 )
 
 func requireForkContext(w WorkContext, in WorkInput) error {
-	if w.Fork == nil || !idRE.MatchString(w.Fork.Round) || w.Fork.Phase == "synced" || w.Fork.Phase == "restart" || forkFacts(w)["round"] != w.Fork.Round || w.Guide.Mode != "local-edit" || w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.EvidenceVersion != in.EvidenceVersion || w.Task.GuideVersion != in.GuideVersion {
+	if w.Fork == nil || !idRE.MatchString(w.Fork.Round) || w.Fork.Phase == "restart" || forkFacts(w)["round"] != w.Fork.Round || w.Guide.Mode != "local-edit" || w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.EvidenceVersion != in.EvidenceVersion || w.Task.GuideVersion != in.GuideVersion {
 		return ErrWorkDenied
 	}
 	return nil
@@ -18,6 +18,9 @@ func requireForkContext(w WorkContext, in WorkInput) error {
 func requireForkWork(w WorkContext, in WorkInput) error {
 	if err := requireForkContext(w, in); err != nil {
 		return err
+	}
+	if w.Fork.Phase == "synced" {
+		return ErrWorkDenied
 	}
 	if w.Fork.SyncMode != w.Guide.ForkSyncMode {
 		return errors.New("sync mode changed; select an authorized batch before modifying work")
@@ -102,14 +105,22 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 }
 
 func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkResult) error {
-	check := requireForkContext
-	if in.Outcome == "merged" || in.Outcome == "changes-ready" {
-		check = requireForkWork
-	}
-	if err := check(w, in.WorkInput); err != nil {
+	if err := requireForkContext(w, in.WorkInput); err != nil {
 		return err
 	}
 	p := *w.Fork
+	if p.Phase == "synced" {
+		if in.Outcome != "merged" || p.LastSuccess != p.Upstream || p.SyncMode != w.Guide.ForkSyncMode {
+			return ErrWorkDenied
+		}
+		if err := s.verifyCompletedForkEvidence(ctx, w, in.WorkInput); err != nil {
+			return err
+		}
+	} else if in.Outcome == "merged" || in.Outcome == "changes-ready" {
+		if err := requireForkWork(w, in.WorkInput); err != nil {
+			return err
+		}
+	}
 	if forkFacts(w)["round"] != p.Round {
 		return ErrStaleWork
 	}
@@ -133,6 +144,37 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 		p.Phase, p.NextAttempt = "needs-decision", 0
 	}
 	return s.Store.SaveForkProgress(ctx, w.Event.Key, w.Fork.Revision, p, &in)
+}
+
+// Completed snapshots deliberately retain historical verification metadata
+// across collector upgrades. Reconfirming a result must independently fetch and
+// match today's actual merge proof, never turn that retained evidence into proof.
+func (s *Service) verifyCompletedForkEvidence(ctx context.Context, w WorkContext, in WorkInput) error {
+	g, ok := s.GH.(ForkSource)
+	if !ok {
+		return ErrWorkDenied
+	}
+	f, ok := s.Config.Fork(w.Event.Key)
+	if !ok {
+		return ErrWorkDenied
+	}
+	o, err := g.CollectFork(ctx, f, *w.Fork)
+	if err != nil {
+		return err
+	}
+	var fresh Snapshot
+	if err = json.Unmarshal(forkSnapshot(f, *w.Fork, o), &fresh); err != nil {
+		return err
+	}
+	// The readiness flag is derived from progress, not new GitHub evidence.
+	if ready, exists := forkFacts(w)["next_batch_ready"]; exists {
+		fresh.Objects["fork"]["next_batch_ready"] = ready
+	}
+	if hash(canonical(fresh)) != w.CurrentVersion {
+		return ErrStaleWork
+	}
+	_, err = s.CheckWork(ctx, in)
+	return err
 }
 
 // Restart after a closed PR, including explicit retirement of an already

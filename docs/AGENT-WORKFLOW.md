@@ -66,7 +66,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 ## 用最新报告关联已处理的旧事件
 
-持续 fork 维护可能在执行过程中连续收到检查或评审更新。先逐条核对 `pending` 中属于同一维护事项的事件，在最新证据上保存完整的 `investigated`、`changes-ready` 或 `merged` 报告。保存新报告不会自动清除旧事件。
+持续 fork 维护可能在执行过程中连续收到检查或评审更新。先逐条核对 `pending` 中属于同一维护事项的事件，在最新证据上保存完整的 `investigated`、`changes-ready` 或 `merged` 报告。保存新报告不会自动清除旧事件。若 fork 已同步但又出现新事件，原负责人核对新事件后，可在当前证据上用新报告 UUID 再次记录 `merged`；程序会重新验证同一轮的实际合并，原报告和完成位置保留。
 
 若旧事件涉及的事项已由这份报告处理，原负责人可在 `in_progress` 状态下逐条记录覆盖关系：
 

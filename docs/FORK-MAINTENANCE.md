@@ -174,6 +174,8 @@ work=(--event "$EVENT_ID" --executor "$EXECUTOR"
 
 若最新报告已处理较早的检查或评审变化，但旧事件仍在 `pending` 中，逐条阅读并用 [`superseded` 判断](AGENT-WORKFLOW.md#用最新报告关联已处理的旧事件)关联到最新报告，再收尾。不要对过期证据补写工作报告，也不要仅为清空队列将未核对事件记为 `quiet`。旧的 `waiting` 报告保留，不需要改写成最终结果。
 
+若保存 `merged` 后已出现新事件，原报告继续保留。原负责人先读取并核对新事件，按当前证据重新关联，再用新的报告 UUID 记录 `merged`。已同步的同一轮允许再次确认，但程序会重新查询远端，核对实际合并、测试证明、当前指引及归属；这不会再次推进完成位置。随后可将已核对的旧事件逐条关联到新报告，再执行 `finish-work`。不要直接引用过期报告覆盖新证据。
+
 ## 分批适配有较多定制的仓库
 
 存在历史压缩合入或需要修改商业定制代码时，可由部署者在目标仓库的 `repositories` 条目设置 `"fork_sync_mode": "adapted-batches"`，并为对应规则配置完整的 `local_repository`。未设置时继续原样同步。此选项不更换规则名称、讨论或负责人，也不增加 `github_actions` 权限。已有原样同步轮次尚未推送、未创建 PR 时，可以直接开始第一批；已发布的轮次须先完成，或关闭未合入 PR 并明确 `restart-sync` 后再切换。
@@ -197,7 +199,7 @@ work=(--event "$EVENT_ID" --executor "$EXECUTOR"
 
 下一批仍使用同一项工作。刷新并关联新证据后调用 `start-sync-batch --count 1 --reason-file next-batch.txt`，省略 `--after`，程序从已核验位置继续；传入其他起点会被拒绝。未完成且尚未发布的批次可重新选择数量，但必须沿用原起点，旧工作区原样保留。已发布且未完成的 PR 不能被新批次静默替换；关闭后先明确 `restart-sync`，再从相同位置重试。
 
-进度中的 `adaptation_baseline` 保留首次选择的范围起点，`batch_after`、`batch_commits` 和 `batch_reason` 记录当前批次。`last_success_upstream_sha` 只记录已核验完成的位置；`next_batch_ready` 表示完成后还有上游变更可选。服务重启保留这些记录。撤回模式或仓库权限后，旧批次不能继续写入；恢复时必须重新核对当前规则。
+进度中的 `adaptation_baseline` 保留首次选择的范围起点，`batch_after`、`batch_commits` 和 `batch_reason` 记录当前批次。`last_success_upstream_sha` 只记录已核验完成的位置；下一批是否可选，以 `fork.phase=synced` 且 `fork.observed_upstream_sha` 不同于 `fork.upstream_sha` 为准。快照中的 `next_batch_ready` 保留采集时的值；仅因保存完成结果而变化时，不生成新事件或使原报告过期。服务重启保留这些记录。撤回模式或仓库权限后，旧批次不能继续写入；恢复时必须重新核对当前规则。
 
 ## 替换旧同步分支
 

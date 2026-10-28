@@ -445,6 +445,8 @@ work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha�
 
 每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr/edit-pr 只能使用 sync_branch，merge 使用目标分支。默认只允许正常推送；精确 sync_branch_replacement 授权通过检查并返回 expected_remote_head 时，才可用显式 --force-with-lease 替换指定旧提交。PR 必须采用 merge commit。只配置 push/open-pr 时，由人完成合入，仍可核验结果并记录 merged。GitHub PR 已合入后，刷新并读取 current_event_id 对应的新事件，等待投递确认，重新关联版本，再保存 merged；程序检查实际合并提交的树和祖先关系。旧事件不能代表新的核验结果。
 
+若保存 merged 后已有新事件，原报告保留。先核对新事件、关联当前证据，再用新的报告 UUID 记录 merged；已同步的同一轮仍需重新查询远端并核验实际合并、测试证明、当前指引和归属，不会再次推进完成位置。之后逐条关联已核对的旧事件并 finish-work。下一批是否可选，以 fork.phase=synced 且 fork.observed_upstream_sha 不同于 fork.upstream_sha 为准；不要依赖历史快照的 next_batch_ready 标记。
+
 waiting 保存等待条件，needs-decision 保存必须由人决定的具体问题；不可用 quiet 代替维护结果。处理超时会有限次唤醒原负责人，不交给其他执行者。PR 被关闭但未合入时先解释原因；只有决定重试后才 restart-sync，新轮次不继承旧测试证据。详细配置、操作和恢复方法见仓库 docs/FORK-MAINTENANCE.md。
 
 %s 不要将本目录 private/ 中的文件内容写进消息、报告或日志。

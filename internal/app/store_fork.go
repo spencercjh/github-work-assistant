@@ -89,8 +89,9 @@ func (s *Store) ObserveFork(ctx context.Context, spec ForkSpec, expected ForkPro
 }
 
 // Preserve completed evidence and report associations when only the collector's
-// verification rules changed. Active rounds still require fresh verification;
-// requireForkWork forbids reusing completed evidence for writes or completion.
+// verification rules or progress-derived readiness changed. This preserves the
+// report that completed the round. Writes remain forbidden; any later merged
+// report independently fetches and checks the current remote proof.
 func completedForkSnapshot(ctx context.Context, tx *database.Tx, key string, body []byte) ([]byte, error) {
 	var previous string
 	err := tx.QueryRowContext(ctx, `SELECT body FROM ghraft_snapshots WHERE resource_key=?`, key).Scan(&previous)
@@ -104,8 +105,10 @@ func completedForkSnapshot(ctx context.Context, tx *database.Tx, key string, bod
 	if json.Unmarshal([]byte(previous), &old) != nil || json.Unmarshal(body, &current) != nil || old.Objects["fork"] == nil || current.Objects["fork"] == nil {
 		return body, nil
 	}
-	for _, name := range []string{"contains_validated", "merge_verified", "merge_commit_sha"} {
-		old.Objects["fork"][name] = current.Objects["fork"][name]
+	for _, name := range []string{"contains_validated", "merge_verified", "merge_commit_sha", "next_batch_ready"} {
+		if value, exists := current.Objects["fork"][name]; exists {
+			old.Objects["fork"][name] = value
+		}
 	}
 	if bytes.Equal(canonical(old), body) {
 		return []byte(previous), nil
