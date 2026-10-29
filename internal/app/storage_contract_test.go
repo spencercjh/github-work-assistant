@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -123,5 +124,47 @@ func TestSchemaReadinessRequiresResourceLocks(t *testing.T) {
 	}
 	if err := s.SchemaReady(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type oldMetaRecord struct {
+	Name  string `gorm:"size:120;primaryKey"`
+	Value string `gorm:"type:text;not null"`
+}
+
+func (oldMetaRecord) TableName() string { return "ghraft_meta" }
+
+func TestMetadataMigrationPreservesHistoryAndLargeProvenance(t *testing.T) {
+	s := freshTestStore(t)
+	ctx := t.Context()
+	migrator := s.db.Session(ctx).Migrator()
+	if err := migrator.DropTable(&metaRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrator.CreateTable(&oldMetaRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutMeta(ctx, "existing", "preserve previous progress"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// A proof stores the full source table in the metadata JSON. Exercise a
+	// body at the accepted byte limit, including non-ASCII text and escaping.
+	body := strings.Repeat("来源<>", maxPRBodyBytes/len("来源<>"))
+	progress := ForkProgress{ValidatedPRSection: body}
+	encoded := string(canonical(progress))
+	if err := s.PutMeta(ctx, "large-proof", encoded); err != nil {
+		t.Fatal("upgraded metadata cannot store a supported proof", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal("repeat migration", err)
+	}
+	other := openTestStore(t)
+	for key, want := range map[string]string{"existing": "preserve previous progress", "large-proof": encoded} {
+		if got, err := other.Meta(ctx, key, ""); err != nil || got != want {
+			t.Fatal("metadata changed during migration or reopening", key, err)
+		}
 	}
 }
