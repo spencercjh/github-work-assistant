@@ -106,6 +106,8 @@ type ForkProgress struct {
 	ValidatedBase      string   `json:"validated_base"`
 	ValidatedTree      string   `json:"validated_tree"`
 	ValidatedGuide     string   `json:"validated_guide"`
+	ValidatedMapping   string   `json:"validated_mapping,omitempty"`
+	ValidatedPRSection string   `json:"validated_pr_section,omitempty"`
 	TestLog            string   `json:"test_log,omitempty"`
 	TestLogHash        string   `json:"test_log_hash,omitempty"`
 	NextAttempt        int64    `json:"next_attempt"`
@@ -161,7 +163,13 @@ const adaptedMergeInstruction = "Merge requires separate delegation and squash; 
 const legacyAdaptedMergeInstruction = "Merge requires separate delegation and a merge commit whose parents and tree match the test proof."
 
 func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
-	return d.guide(c, adaptedMergeInstruction)
+	g, err := d.guide(c, adaptedMergeInstruction)
+	if err == nil && d.Fork != nil && g.ForkSyncMode == adaptedBatches {
+		g.Text += "\n\n" + adaptedProvenanceInstruction
+		g.Version = ""
+		g.Version = hash(canonical(g))
+	}
+	return g, err
 }
 
 func (d WorkDefinition) guide(c Config, adaptedMerge string) (RepositoryGuide, error) {

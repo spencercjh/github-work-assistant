@@ -22,6 +22,7 @@ type Workspace struct {
 	Conflicts    []string   `json:"conflicts"`
 	TestCommands [][]string `json:"test_commands"`
 	Verification string     `json:"verification"`
+	MappingFile  string     `json:"mapping_file,omitempty"`
 }
 
 func gitLocal(ctx context.Context, directory string, args ...string) (string, error) {

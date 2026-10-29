@@ -205,8 +205,11 @@ func fail(w http.ResponseWriter, status int, code string) {
 }
 func ok(w http.ResponseWriter, v any) { writeJSON(w, 200, map[string]any{"ok": true, "result": v}) }
 func decode(r *http.Request, v any) error {
-	raw, err := io.ReadAll(io.LimitReader(r.Body, (64<<10)+1))
-	if err != nil || len(raw) > 64<<10 {
+	return decodeLimit(r, v, 64<<10)
+}
+func decodeLimit(r *http.Request, v any, limit int) error {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
+	if err != nil || len(raw) > limit {
 		return errors.New("request body too large or unreadable")
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -497,6 +500,6 @@ func (s *Service) Manifest() map[string]any {
 	add("refresh-work-context", "Refresh one authorized resource through read-only GitHub queries before work; returns stale=true if this event was superseded.", map[string]any{"event_id": param("Captured event hash")})
 	add("link-task", "Bind or resume a real Raft task for this resource. Refuses conflicting tasks and obsolete evidence/guidance; does not create or change Raft tasks.", map[string]any{"event_id": param("Event hash"), "evidence_version": param("Current event version"), "guide_version": param("Current guide version"), "raft_task_message_id": param("Existing claimed task root message UUID")})
 	add("record-work-result", "Record an Agent work report against the current task, evidence and guidance. No GitHub operation or Raft status change.", map[string]any{"event_id": param("Event hash"), "evidence_version": param("Current event version"), "guide_version": param("Current guide version"), "raft_task_message_id": param("Bound task UUID"), "raft_report_message_id": param("Actual report UUID"), "outcome": param("investigated, changes-ready, needs-decision, waiting or merged"), "summary": param("Evidence, tests, limitations and artifact references")})
-	add("check-github-action", "Refresh and check delegated permission, ownership and PR revisions. Does not perform a write or judge merge readiness.", map[string]any{"event_id": param("Event hash"), "evidence_version": param("Current event version"), "guide_version": param("Current guide version"), "raft_task_message_id": param("Bound task UUID"), "action": param("Delegated action; edit-pr permits only title/body updates on the current open PR"), "head": param("Reviewed PR head SHA"), "base": param("Reviewed PR base SHA"), "ref": optional("Required for fork work: exact sync branch for push/open-pr/edit-pr, target branch for merge")})
+	add("check-github-action", "Refresh and check delegated permission, ownership and PR revisions. Does not perform a write or judge merge readiness.", map[string]any{"event_id": param("Event hash"), "evidence_version": param("Current event version"), "guide_version": param("Current guide version"), "raft_task_message_id": param("Bound task UUID"), "action": param("Delegated action; edit-pr permits only title/body updates on the current open PR"), "head": param("Reviewed PR head SHA"), "base": param("Reviewed PR base SHA"), "ref": optional("Required for fork work: exact sync branch for push/open-pr/edit-pr, target branch for merge"), "body": optional("Full proposed PR body, at most 128 KiB; required for adapted fork open-pr/edit-pr and must include tested provenance")})
 	return map[string]any{"schema": "raft-agent-manifest.v0", "name": "GitHub Work App MVP", "service": s.Config.ClientID, "description": "GitHub context and event receipts for work executed inside Raft.", "app_origin": s.Config.Origin, "execution": map[string]string{"mode": "http_api", "base_url": s.Config.Origin}, "auth": map[string]string{"type": "login_with_raft"}, "context_check": map[string]string{"url": s.Config.Origin + "/api/context", "method": "GET"}, "actions": actions}
 }

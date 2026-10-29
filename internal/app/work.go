@@ -224,7 +224,7 @@ func (s *Service) RecordWorkResult(ctx context.Context, in WorkResult) error {
 func (s *Service) registerWorkActions(m *http.ServeMux) {
 	m.HandleFunc("POST /api/actions/check-github-action", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in GitHubActionInput
-		if decode(r, &in) != nil {
+		if decodeLimit(r, &in, maxGitHubActionRequestBytes) != nil {
 			fail(w, 400, "INVALID_INPUT")
 			return
 		}

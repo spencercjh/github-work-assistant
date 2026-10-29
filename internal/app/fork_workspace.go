@@ -105,6 +105,11 @@ func (s *Service) prepareForkWorkspace(ctx context.Context, w WorkContext, in Wo
 	} else if err != nil {
 		return Workspace{}, err
 	}
+	if p.SyncMode == adaptedBatches {
+		if err = prepareForkMapping(metadata+".commits.json", p); err != nil {
+			return Workspace{}, err
+		}
+	}
 	return s.verifyForkWorkspace(ctx, w, in)
 }
 
@@ -169,7 +174,8 @@ func (s *Service) verifyForkWorkspace(ctx context.Context, w WorkContext, in Wor
 	workspace.Conflicts = []string{}
 	workspace.Verification = "Source is the exact pinned upstream commit. test-worktree validates a separate temporary merge with the current target; push only this source HEAD to the returned branch."
 	if p.SyncMode == adaptedBatches {
-		workspace.Verification = "Adapted source retains the initial target. Port only the listed batch and document custom adaptations; test-worktree validates this actual HEAD merged with the current target before writing the returned branch."
+		workspace.MappingFile = metadata + ".commits.json"
+		workspace.Verification = "Adapted source retains the initial target. " + adaptedProvenanceInstruction
 	}
 	return workspace, nil
 }
@@ -229,12 +235,13 @@ func cleanCommitted(ctx context.Context, path string) error {
 }
 
 type WorkspaceTest struct {
-	Head    string `json:"head"`
-	Tree    string `json:"tree"`
-	Base    string `json:"base"`
-	Passed  bool   `json:"passed"`
-	Log     string `json:"log"`
-	LogHash string `json:"log_hash"`
+	Head       string `json:"head"`
+	Tree       string `json:"tree"`
+	Base       string `json:"base"`
+	Passed     bool   `json:"passed"`
+	Log        string `json:"log"`
+	LogHash    string `json:"log_hash"`
+	PRBodyFile string `json:"pr_body_file,omitempty"`
 }
 
 // Test commands come only from the trusted local guide. Tests still execute
@@ -272,8 +279,17 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	}
 	p := *w.Fork
 	p.ValidatedHead, p.ValidatedBase, p.ValidatedTree, p.ValidatedGuide, p.TestLog, p.TestLogHash = "", "", "", "", "", ""
+	p.ValidatedMapping, p.ValidatedPRSection = "", ""
 	if err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil); err != nil {
 		return result, err
+	}
+	var mappingHash, prSection string
+	f, _ := s.Config.Fork(w.Event.Key)
+	if p.SyncMode == adaptedBatches {
+		mappingHash, prSection, err = validateForkMapping(ctx, f, &p, workspace)
+		if err != nil {
+			return result, err
+		}
 	}
 	result.Head, result.Base = workspace.Head, workspace.Base
 	testPath, cleanup, err := s.forkTestWorktree(ctx, workspace)
@@ -328,6 +344,11 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	if source, err := s.verifyForkWorkspace(ctx, w, in); err != nil || source.Head != result.Head {
 		return result, errors.New("source changed during tests")
 	}
+	if p.SyncMode == adaptedBatches {
+		if current, _, err := validateForkMapping(ctx, f, &p, workspace); err != nil || current != mappingHash {
+			return result, errors.New("upstream mapping changed during tests")
+		}
+	}
 	// Tests may outlive the evidence freshness window. Collect again, then
 	// reject changed inputs or ownership before saving the tested revisions.
 	if _, err = s.RefreshWorkContext(ctx, in.EventID); err != nil {
@@ -342,6 +363,13 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	}
 	p = *w.Fork
 	p.ValidatedHead, p.ValidatedBase, p.ValidatedTree, p.ValidatedGuide, p.TestLog, p.TestLogHash = result.Head, result.Base, result.Tree, in.GuideVersion, result.Log, result.LogHash
+	p.ValidatedMapping, p.ValidatedPRSection = mappingHash, prSection
+	if p.SyncMode == adaptedBatches {
+		result.PRBodyFile = metadata + ".pr-body.md"
+		if err = os.WriteFile(result.PRBodyFile, []byte(prSection+"\n"), 0600); err != nil {
+			return result, err
+		}
+	}
 	if err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil); err != nil {
 		return result, err
 	}

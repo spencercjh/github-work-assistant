@@ -41,7 +41,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 	if !shaRE.MatchString(in.Head) || in.Base != str(facts["target_sha"]) {
 		return result, ErrStaleWork
 	}
-	if in.Action == "push" || in.Action == "open-pr" || in.Action == "merge" {
+	if in.Action == "push" || in.Action == "open-pr" || in.Action == "merge" || (p.SyncMode == adaptedBatches && in.Action == "edit-pr") {
 		if p.ValidatedHead != in.Head || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != in.Base || !validForkProofHead(*p) || !shaRE.MatchString(p.ValidatedTree) {
 			return result, errors.New("run test-worktree for this commit, target and guide before writing")
 		}
@@ -51,6 +51,23 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 		}
 		if err = cleanCommitted(ctx, local.Path); err != nil {
 			return result, err
+		}
+		if p.SyncMode == adaptedBatches {
+			mapping, section, err := validateForkMapping(ctx, f, p, local)
+			if err != nil || mapping != p.ValidatedMapping || section != p.ValidatedPRSection {
+				return result, errors.New("upstream mapping differs from the tested provenance; run test-worktree again")
+			}
+		}
+	}
+	if p.SyncMode == adaptedBatches {
+		body := in.Body
+		if in.Action == "merge" {
+			body = str(snapshot.Objects["issue"]["body"])
+		}
+		if in.Action == "open-pr" || in.Action == "edit-pr" || in.Action == "merge" {
+			if err := checkProvenanceBody(body, p.ValidatedPRSection); err != nil {
+				return result, err
+			}
 		}
 	}
 	replacementHead := ""
@@ -130,6 +147,19 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 	}
 	var snapshot Snapshot
 	_ = json.Unmarshal(w.Snapshot, &snapshot)
+	if p.SyncMode == adaptedBatches && (in.Outcome == "merged" || in.Outcome == "changes-ready") {
+		// Already completed historical rounds keep their original proof. No
+		// unfinished round may use that exception to bypass the new contract.
+		historical := p.Phase == "synced" && p.ValidatedMapping == "" && p.ValidatedPRSection == ""
+		if !historical {
+			if !idRE.MatchString(p.ValidatedMapping) {
+				return errors.New("adapted results require tested per-commit provenance")
+			}
+			if err := checkProvenanceBody(str(snapshot.Objects["issue"]["body"]), p.ValidatedPRSection); err != nil {
+				return err
+			}
+		}
+	}
 	switch in.Outcome {
 	case "merged":
 		pull, facts := snapshot.Objects["pull"], forkFacts(w)
@@ -141,6 +171,9 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 		if !validForkProofHead(p) || !shaRE.MatchString(p.ValidatedTree) || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != str(forkFacts(w)["target_sha"]) {
 			return errors.New("changes-ready requires current fork regression evidence")
 		}
+		if p.SyncMode == adaptedBatches && (p.PR == 0 || snapshot.Objects["pull"]["head"] != p.ValidatedHead || snapshot.Objects["pull"]["state"] != "open") {
+			return errors.New("adapted changes-ready requires the tested head on the current open PR")
+		}
 		p.Phase, p.NextAttempt = "waiting", time.Now().Add(time.Hour).Unix()
 	case "waiting":
 		p.Phase, p.NextAttempt = "waiting", time.Now().Add(15*time.Minute).Unix()
@@ -150,10 +183,10 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 	return s.Store.SaveForkProgress(ctx, w.Event.Key, w.Fork.Revision, p, &in)
 }
 
-// An already tested batch may have been human-squashed before the verifier was
-// upgraded. Accept only the exact previous generated merge instruction with
-// today's repository policy, tests and permissions otherwise unchanged. This
-// exception is for completion only; every write still needs the current guide.
+// Completed historical rounds retain their original generated instructions.
+// Accept only exact known versions with today's policy otherwise unchanged;
+// recordForkResult separately enforces provenance for unfinished rounds.
+// Every write still needs the current guide.
 func (s *Service) forkCompletionGuideMatches(w WorkContext) bool {
 	if w.Fork.ValidatedGuide == w.Guide.Version {
 		return true
@@ -165,8 +198,13 @@ func (s *Service) forkCompletionGuideMatches(w WorkContext) bool {
 	if err != nil {
 		return false
 	}
-	previous, err := d.guide(s.Config, legacyAdaptedMergeInstruction)
-	return err == nil && w.Fork.ValidatedGuide == previous.Version
+	for _, instruction := range []string{adaptedMergeInstruction, legacyAdaptedMergeInstruction} {
+		previous, err := d.guide(s.Config, instruction)
+		if err == nil && w.Fork.ValidatedGuide == previous.Version {
+			return true
+		}
+	}
+	return false
 }
 
 // Completed snapshots deliberately retain historical verification metadata

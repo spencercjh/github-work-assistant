@@ -22,6 +22,7 @@ type forkFixtureSource struct {
 	closed, merged, private, denied                                 bool
 	checks                                                          string
 	accessErr                                                       error
+	prBody                                                          *string
 }
 
 func (g *forkFixtureSource) CheckIdentity(context.Context) error { return nil }
@@ -91,6 +92,10 @@ func (g *forkFixtureSource) CollectFork(ctx context.Context, f ForkSpec, p ForkP
 			var snap Snapshot
 			_ = json.Unmarshal(b, &snap)
 			o.Objects = snap.Objects
+			o.Objects["issue"]["body"] = p.ValidatedPRSection
+			if g.prBody != nil {
+				o.Objects["issue"]["body"] = *g.prBody
+			}
 		}
 	}
 	return o, nil

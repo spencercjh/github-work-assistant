@@ -35,7 +35,7 @@ func (watchRecord) TableName() string { return "ghraft_watches" }
 
 type metaRecord struct {
 	Name  string `gorm:"size:120;primaryKey"`
-	Value string `gorm:"type:text;not null"`
+	Value string `gorm:"size:16777215;not null"` // Includes complete fork provenance proofs; MySQL TEXT is too small.
 }
 
 func (metaRecord) TableName() string { return "ghraft_meta" }

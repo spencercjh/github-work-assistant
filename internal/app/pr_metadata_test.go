@@ -75,7 +75,7 @@ func TestPRMetadataRequiresSeparateDelegationAndOpenPR(t *testing.T) {
 	}
 }
 
-func TestForkMetadataUpdatesWithoutWorkspaceOrTestProof(t *testing.T) {
+func TestForkMetadataProofRequirementsFollowSyncMode(t *testing.T) {
 	for _, adapted := range []bool{false, true} {
 		s, g, _ := forkFixtureConfigured(t, adapted)
 		s.Config.Repositories[0].GitHubActions = []string{"push", "open-pr", "edit-pr"}
@@ -95,7 +95,11 @@ func TestForkMetadataUpdatesWithoutWorkspaceOrTestProof(t *testing.T) {
 		before := canonical(w.Fork)
 		check := GitHubActionInput{WorkInput: in, Action: "edit-pr", Head: g.remoteHead, Base: g.target, Ref: w.Fork.Branch}
 		got, err := s.CheckGitHubAction(t.Context(), check)
-		if err != nil || !got.Permitted || got.Number != 7 || got.Branch != w.Fork.Branch || got.TargetBranch != "main" || !slices.Equal(got.EditableFields, []string{"title", "body"}) {
+		if adapted {
+			if err == nil || got.Permitted {
+				t.Fatal("adapted metadata edit bypassed provenance proof")
+			}
+		} else if err != nil || !got.Permitted || got.Number != 7 || got.Branch != w.Fork.Branch || got.TargetBranch != "main" || !slices.Equal(got.EditableFields, []string{"title", "body"}) {
 			t.Fatal("metadata requires irrelevant source testing", got, err)
 		}
 		after, err := s.WorkContext(t.Context(), in.EventID)
