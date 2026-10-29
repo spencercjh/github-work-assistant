@@ -17,6 +17,20 @@ type GitHubActionInput struct {
 	Body   string `json:"body,omitempty"`
 }
 
+const maxPRBodyBytes = 128 << 10
+
+// JSON can expand one body byte into six (for example '<' becomes '\u003c').
+// Leave room for that expansion and the action's other fields; other endpoints
+// retain the smaller default request limit.
+const maxGitHubActionRequestBytes = 1 << 20
+
+func checkPRBodySize(body string) error {
+	if len(body) > maxPRBodyBytes {
+		return errors.New("PR body exceeds 128 KiB; shorten the descriptions or select a smaller batch")
+	}
+	return nil
+}
+
 // RequestWork is an operator command: enqueue a new consideration of an already
 // watched item after a new delegation, without inventing a GitHub change or
 // replaying archived events. It never reopens a closed discussion.
@@ -47,6 +61,9 @@ type GitHubActionCheck struct {
 // proxy. The executor evaluates the trusted guide and uses its own gh session.
 func (s *Service) CheckGitHubAction(ctx context.Context, in GitHubActionInput) (GitHubActionCheck, error) {
 	var result GitHubActionCheck
+	if err := checkPRBodySize(in.Body); err != nil {
+		return result, err
+	}
 	if _, err := s.RefreshWorkContext(ctx, in.EventID); err != nil {
 		return result, err
 	}

@@ -142,6 +142,11 @@ func validateForkMapping(ctx context.Context, f ForkSpec, p *ForkProgress, ws Wo
 		return "", "", errors.New("all adapted commits must have a unique upstream mapping; no unrelated commits or empty batch")
 	}
 	section.WriteString(provenanceEnd)
+	// Include the trailing newline written to pr_body_file. Reject an expanded
+	// table before test-worktree can issue proof for a body the action rejects.
+	if err := checkPRBodySize(section.String() + "\n"); err != nil {
+		return "", "", err
+	}
 	return hash(canonical(rows)), section.String(), nil
 }
 
