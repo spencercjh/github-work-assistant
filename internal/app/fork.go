@@ -25,6 +25,24 @@ type ForkSpec struct {
 	LocalRepository string    `json:"local_repository,omitempty"`
 }
 
+// An operator may acknowledge one already published merge without authorizing
+// future merges or changing the rule's identity. The collector still requires
+// the exact tested parents and tree, the same PR head and target reachability.
+type ForkMergeAcceptance struct {
+	ForkID      string `json:"fork_id"`
+	PR          int    `json:"pr"`
+	MergeCommit string `json:"merge_commit"`
+}
+
+func acceptedForkMerge(acceptances []ForkMergeAcceptance, f ForkSpec, pr int, sha string) bool {
+	if pr < 1 || !shaRE.MatchString(sha) {
+		return false
+	}
+	return slices.ContainsFunc(acceptances, func(a ForkMergeAcceptance) bool {
+		return a.ForkID == f.ID && a.PR == pr && a.MergeCommit == sha
+	})
+}
+
 var forkIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,47}$`)
 var branchRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$`)
 
@@ -79,6 +97,22 @@ func (c Config) validateForks() error {
 		if g.Mode != "local-edit" || len(g.TestCommands) == 0 {
 			return errors.New("fork maintenance requires an explicit local-edit target policy and regression commands")
 		}
+	}
+	accepted := map[string]bool{}
+	for _, a := range c.ForkMergeAcceptances {
+		f, ok := c.Fork("fork:" + a.ForkID)
+		key := fmt.Sprintf("%s:%d", a.ForkID, a.PR)
+		if !ok || a.PR < 1 || !shaRE.MatchString(a.MergeCommit) || accepted[key] {
+			return errors.New("fork_merge_acceptances require a configured fork, unique PR and exact merge commit SHA")
+		}
+		g, err := c.RepositoryGuide(f.Target.Repo)
+		if err != nil {
+			return err
+		}
+		if g.ForkSyncMode != adaptedBatches {
+			return errors.New("fork_merge_acceptances apply only to already merged adapted batches")
+		}
+		accepted[key] = true
 	}
 	return nil
 }

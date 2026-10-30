@@ -24,6 +24,7 @@ type GH struct {
 	PrivateRepositories             []string
 	PrivateNotificationsSince       string
 	NotificationExcludeRepositories []string
+	ForkMergeAcceptances            []ForkMergeAcceptance
 }
 
 // gh controls GitHub credentials. No token is copied into this App or sent to Raft.

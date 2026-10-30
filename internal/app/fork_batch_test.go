@@ -189,7 +189,7 @@ func TestAdaptedForkSelectsFirstParentOrderAndRejectsSkipping(t *testing.T) {
 }
 
 func TestAdaptedForkCollectorVerifiesActualMergeWithoutInventingUpstreamAncestry(t *testing.T) {
-	for _, scenario := range []string{"valid squash", "wrong parent", "wrong tree", "target advanced", "unreachable merge", "changed head", "new merge commit", "completed legacy merge", "legacy missing cursor", "raw squash"} {
+	for _, scenario := range []string{"valid squash", "wrong parent", "wrong tree", "target advanced", "unreachable merge", "changed head", "new merge commit", "completed legacy merge", "legacy missing cursor", "raw squash", "accepted merge", "accepted advanced target", "accepted wrong parent", "accepted wrong tree", "accepted changed head", "accepted unreachable merge", "accepted wrong fork", "accepted wrong PR", "accepted wrong SHA"} {
 		t.Run(scenario, func(t *testing.T) {
 			g, fixture, f, target, upstream := independentForkFixture(t)
 			after := fixtureGit(t, f.LocalRepository, "", "rev-parse", upstream+"^")
@@ -199,14 +199,14 @@ func TestAdaptedForkCollectorVerifiesActualMergeWithoutInventingUpstreamAncestry
 			head := syntheticCommit(t, f.LocalRepository, tree, prepared)
 			p := ForkProgress{SyncMode: adaptedBatches, BatchAfter: after, BatchCommits: []string{upstream}, Round: strings.Repeat("a", 64), Branch: "ghraft/sync/independent/batch", Upstream: upstream, InitialTarget: target, ValidatedHead: head, ValidatedBase: target, ValidatedTree: tree}
 			parent, mergedTree := target, tree
-			if scenario == "wrong parent" {
+			if scenario == "wrong parent" || scenario == "accepted wrong parent" {
 				parent = syntheticCommit(t, f.LocalRepository, tree, target)
 			}
-			if scenario == "wrong tree" {
+			if scenario == "wrong tree" || scenario == "accepted wrong tree" {
 				mergedTree = fixtureGit(t, f.LocalRepository, "", "rev-parse", target+"^{tree}")
 			}
 			parents := []string{parent}
-			if scenario == "new merge commit" || strings.Contains(scenario, "legacy") {
+			if scenario == "new merge commit" || strings.Contains(scenario, "legacy") || strings.HasPrefix(scenario, "accepted ") {
 				parents = append(parents, head)
 			}
 			if strings.Contains(scenario, "legacy") {
@@ -220,14 +220,26 @@ func TestAdaptedForkCollectorVerifiesActualMergeWithoutInventingUpstreamAncestry
 			}
 			merge := syntheticCommit(t, f.LocalRepository, mergedTree, parents...)
 			remoteTarget := merge
-			if scenario == "unreachable merge" {
+			if scenario == "unreachable merge" || scenario == "accepted unreachable merge" {
 				remoteTarget = target
 			}
-			if scenario == "changed head" {
+			if scenario == "changed head" || scenario == "accepted changed head" {
 				head = syntheticCommit(t, f.LocalRepository, tree, head)
 			}
-			if scenario == "target advanced" {
+			if scenario == "target advanced" || scenario == "accepted advanced target" {
 				remoteTarget = syntheticCommit(t, f.LocalRepository, tree, merge)
+			}
+			if strings.HasPrefix(scenario, "accepted ") {
+				grant := ForkMergeAcceptance{ForkID: f.ID, PR: 1, MergeCommit: merge}
+				switch scenario {
+				case "accepted wrong fork":
+					grant.ForkID = "another-fork"
+				case "accepted wrong PR":
+					grant.PR = 2
+				case "accepted wrong SHA":
+					grant.MergeCommit = target
+				}
+				g.ForkMergeAcceptances = []ForkMergeAcceptance{grant}
 			}
 			data := readFixture(t, fixture)
 			data["repos/example/fixture/commits/"+head+"/statuses?per_page=100"] = []any{[]any{}}
@@ -250,7 +262,7 @@ func TestAdaptedForkCollectorVerifiesActualMergeWithoutInventingUpstreamAncestry
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := scenario == "valid squash" || scenario == "target advanced" || scenario == "completed legacy merge"
+			want := scenario == "valid squash" || scenario == "target advanced" || scenario == "completed legacy merge" || scenario == "accepted merge" || scenario == "accepted advanced target"
 			if o.MergeVerified != want || o.ContainsPinned || (len(parents) == 1 && o.ContainsValidated) {
 				t.Fatal("wrong merge proof or fabricated upstream ancestry", o)
 			}
