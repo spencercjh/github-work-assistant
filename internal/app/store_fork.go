@@ -117,6 +117,23 @@ func completedForkSnapshot(ctx context.Context, tx *database.Tx, key string, bod
 }
 
 func (s *Store) SaveForkProgress(ctx context.Context, key string, revision int64, next ForkProgress, result *WorkResult) error {
+	version := ""
+	if result != nil {
+		version = result.EvidenceVersion
+	}
+	return s.saveForkProgress(ctx, key, revision, next, result, version)
+}
+
+// Bind the proof to the refreshed snapshot atomically, including changes which
+// do not alter progress (for example a new PR comment or a moved target).
+func (s *Store) SaveForkTestProof(ctx context.Context, key string, revision int64, next ForkProgress, version string) error {
+	if !idRE.MatchString(version) {
+		return ErrStaleWork
+	}
+	return s.saveForkProgress(ctx, key, revision, next, nil, version)
+}
+
+func (s *Store) saveForkProgress(ctx context.Context, key string, revision int64, next ForkProgress, result *WorkResult, expectedVersion string) error {
 	tx, err := s.db.BeginWrite(ctx, "resource:"+key)
 	if err != nil {
 		return err
@@ -129,14 +146,16 @@ func (s *Store) SaveForkProgress(ctx context.Context, key string, revision int64
 	if p.Revision != revision || p.Round != next.Round || p.SpecVersion != next.SpecVersion {
 		return ErrStaleWork
 	}
-	if result != nil {
+	if result != nil || expectedVersion != "" {
 		var version string
 		if err = tx.QueryRowContext(ctx, `SELECT version_hash FROM ghraft_snapshots WHERE resource_key=?`, key).Scan(&version); err != nil {
 			return err
 		}
-		if result.EvidenceVersion != version {
+		if expectedVersion != version {
 			return ErrStaleWork
 		}
+	}
+	if result != nil {
 		if err = saveReport(ctx, tx, result.EventID, result.ReportID, canonical(result)); err != nil {
 			return err
 		}

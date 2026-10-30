@@ -150,24 +150,36 @@ func (s *Service) CheckWork(ctx context.Context, in WorkInput) (WorkContext, err
 	if err != nil {
 		return w, err
 	}
-	if err := s.VerifyClaim(ctx, in.EventID, in.Executor); err != nil {
+	if err := s.checkWorkAuthority(ctx, w, in); err != nil {
 		return w, err
 	}
-	if w.Stale || in.EvidenceVersion != w.CurrentVersion || in.GuideVersion != w.Guide.Version || w.ObservedAt < time.Now().Add(-10*time.Minute).Unix() {
+	if w.Stale || in.EvidenceVersion != w.CurrentVersion {
 		return w, ErrStaleWork
 	}
+	return w, nil
+}
+
+// Evidence is checked separately: completed fork tests may tolerate only a
+// retry wake, but must still satisfy the same live authority and freshness.
+func (s *Service) checkWorkAuthority(ctx context.Context, w WorkContext, in WorkInput) error {
+	if err := s.VerifyClaim(ctx, in.EventID, in.Executor); err != nil {
+		return err
+	}
+	if in.GuideVersion != w.Guide.Version || w.ObservedAt < time.Now().Add(-10*time.Minute).Unix() {
+		return ErrStaleWork
+	}
 	if !uuidRE.MatchString(in.TaskID) {
-		return w, errors.New("a real Raft task UUID is required")
+		return errors.New("a real Raft task UUID is required")
 	}
 	if s.Config.SharedTasks() {
 		if w.Guide.TaskTarget == "" {
-			return w, errors.New("repository task destination is not configured")
+			return errors.New("repository task destination is not configured")
 		}
 		if err := s.Raft.verifyTaskOwner(ctx, w.Guide.TaskTarget, 0, in.TaskID, in.Executor); err != nil {
-			return w, err
+			return err
 		}
 	}
-	return w, nil
+	return nil
 }
 
 func (s *Service) LinkTask(ctx context.Context, in WorkInput) (TaskLink, error) {

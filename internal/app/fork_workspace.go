@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -349,13 +350,21 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 			return result, errors.New("upstream mapping changed during tests")
 		}
 	}
-	// Tests may outlive the evidence freshness window. Collect again, then
-	// reject changed inputs or ownership before saving the tested revisions.
-	if _, err = s.RefreshWorkContext(ctx, in.EventID); err != nil {
+	// Tests may outlive the evidence freshness window or an automatic retry.
+	// Only a retry wake may differ; all source facts and authority stay bound
+	// to the inputs accepted before running the regression commands.
+	testedSnapshot := w.Snapshot
+	w, err = s.RefreshWorkContext(ctx, in.EventID)
+	if err != nil {
 		return result, err
 	}
-	w, err = s.CheckWork(ctx, in)
-	if err != nil {
+	if err = s.checkWorkAuthority(ctx, w, in); err != nil {
+		return result, err
+	}
+	if !forkTestEvidenceMatches(testedSnapshot, w.Snapshot) {
+		return result, ErrStaleWork
+	}
+	if err = requireForkWork(w, in); err != nil {
 		return result, err
 	}
 	if w.Fork == nil || w.Fork.Round != p.Round || str(forkFacts(w)["target_sha"]) != result.Base {
@@ -370,9 +379,24 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 			return result, err
 		}
 	}
-	if err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil); err != nil {
+	if err = s.Store.SaveForkTestProof(ctx, w.Event.Key, p.Revision, p, w.CurrentVersion); err != nil {
 		return result, err
 	}
 	result.Passed = true
 	return result, nil
+}
+
+func forkTestEvidenceMatches(tested, current []byte) bool {
+	var before, after Snapshot
+	if json.Unmarshal(tested, &before) != nil || json.Unmarshal(current, &after) != nil {
+		return false
+	}
+	oldWake, oldOK := before.Objects["fork"]["wake"].(float64)
+	newWake, newOK := after.Objects["fork"]["wake"].(float64)
+	if !oldOK || !newOK || oldWake < 0 || newWake < oldWake {
+		return false
+	}
+	delete(before.Objects["fork"], "wake")
+	delete(after.Objects["fork"], "wake")
+	return bytes.Equal(canonical(before), canonical(after))
 }

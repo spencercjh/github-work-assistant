@@ -18,6 +18,7 @@ type Persistence interface {
 	ObserveFork(context.Context, ForkSpec, ForkProgress, ForkObservation) error
 	StartForkBatch(context.Context, ForkSpec, ForkProgress, ForkProgress, ForkObservation, string) error
 	SaveForkProgress(context.Context, string, int64, ForkProgress, *WorkResult) error
+	SaveForkTestProof(context.Context, string, int64, ForkProgress, string) error
 	Close() error
 	Migrate(context.Context) error
 	Ping(context.Context) error
