@@ -23,6 +23,7 @@ type forkFixtureSource struct {
 	checks                                                          string
 	accessErr                                                       error
 	prBody                                                          *string
+	mergeAcceptances                                                []ForkMergeAcceptance
 }
 
 func (g *forkFixtureSource) CheckIdentity(context.Context) error { return nil }
@@ -80,7 +81,7 @@ func (g *forkFixtureSource) CollectFork(ctx context.Context, f ForkSpec, p ForkP
 		parents, _ := gitLocal(ctx, g.repository, "show", "-s", "--format=%P", g.mergeCommit)
 		history := parents == p.ValidatedBase+" "+p.ValidatedHead && testedErr == nil && (upstreamErr == nil || p.SyncMode == adaptedBatches)
 		if p.SyncMode == adaptedBatches {
-			history = parents == p.ValidatedBase || (p.Phase == "synced" && p.LastSuccess == p.Upstream && history)
+			history = parents == p.ValidatedBase || (history && ((p.Phase == "synced" && p.LastSuccess == p.Upstream) || acceptedForkMerge(g.mergeAcceptances, f, g.pr, g.mergeCommit)))
 		}
 		o.MergeVerified = validForkProofHead(p) && g.remoteHead == p.ValidatedHead && a != "" && a == b && history && contains(g.mergeCommit)
 	}

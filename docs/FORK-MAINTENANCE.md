@@ -225,6 +225,20 @@ work=(--event "$EVENT_ID" --executor "$EXECUTOR"
 
 升级前已完成的适配轮次保留原证明和合入历史，可继续核验，不补造来源清单。未完成批次必须通过逐提交来源校验，旧证明不能放行新写入或完成结果。仅生成的合并方式说明变化时，已具备来源证明的批次可以沿用旧测试结果核验实际 squash；配置、测试要求或权限变化不适用此例外。
 
+人工误用 merge commit 合入适配 PR 后，如需保留已发布历史，由部署者在主配置中登记该次已合入结果：
+
+```json
+"fork_merge_acceptances": [
+  {
+    "fork_id": "custom-engine",
+    "pr": 123,
+    "merge_commit": "已合入提交的完整40位SHA"
+  }
+]
+```
+
+登记必须匹配维护规则、PR 编号和实际合入提交。采集器仍核对两个父提交依次等于受测目标和受测 PR head、文件树等于受测结果，以及合入提交仍在目标历史中。原负责人使用正常 `record-work-result --outcome merged` 入口完成本轮；来源清单、测试证明、指引和归属检查继续生效。登记本身不推进成功位置，不授予合并权限，也不改变后续适配 PR 的 squash 要求。完成后可以移除该项登记，已完成轮次的证明仍保留。
+
 下一批仍使用同一项工作。刷新并关联新证据后调用 `start-sync-batch --count 1 --reason-file next-batch.txt`，省略 `--after`，程序从已核验位置继续；传入其他起点会被拒绝。未完成且尚未发布的批次可重新选择数量，但必须沿用原起点，旧工作区原样保留。已发布且未完成的 PR 不能被新批次静默替换；关闭后先明确 `restart-sync`，再从相同位置重试。
 
 进度中的 `adaptation_baseline` 保留首次选择的范围起点，`batch_after`、`batch_commits` 和 `batch_reason` 记录当前批次。`last_success_upstream_sha` 只记录已核验完成的位置；下一批是否可选，以 `fork.phase=synced` 且 `fork.observed_upstream_sha` 不同于 `fork.upstream_sha` 为准。快照中的 `next_batch_ready` 保留采集时的值；仅因保存完成结果而变化时，不生成新事件或使原报告过期。服务重启保留这些记录。撤回模式或仓库权限后，旧批次不能继续写入；恢复时必须重新核对当前规则。

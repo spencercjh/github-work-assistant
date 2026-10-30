@@ -202,11 +202,12 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 		historyMatches := parentsMatch && testedInMerge && upstreamInMerge
 		if p.SyncMode == adaptedBatches {
 			// Squash preserves the tested result, not the adapted branch's ancestry.
-			// Previously completed merge commits remain verifiable, but cannot be
-			// used to complete a new adapted batch under the squash policy.
+			// A new merge commit needs an exact operator acceptance; observing a
+			// merge alone never waives the configured squash policy.
 			squash := len(parents) == 1 && str(obj(parents[0])["sha"]) == p.ValidatedBase
 			completedMerge := p.Phase == "synced" && p.LastSuccess == p.Upstream && historyMatches
-			historyMatches = squash || completedMerge
+			acceptedMerge := historyMatches && acceptedForkMerge(g.ForkMergeAcceptances, f, o.PR, o.MergeCommit)
+			historyMatches = squash || completedMerge || acceptedMerge
 		}
 		o.MergeVerified = mergeInTarget && historyMatches && tree == p.ValidatedTree
 	}
