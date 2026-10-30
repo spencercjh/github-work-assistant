@@ -86,7 +86,7 @@ func (g GH) RepositoryClassification(ctx context.Context, repo string) (string, 
 var githubReadPathRE = regexp.MustCompile(`^(user|notifications|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/(?:issues/[0-9]+(?:/(?:comments|timeline))?|pulls/[0-9]+(?:/(?:reviews|comments))?|commits/[a-f0-9]{40}/(?:check-runs|statuses)))?)(?:\?[^\s#]*)?$`)
 
 func validGitHubReadPath(path string) bool {
-	return validForkReadPath(path) || (!strings.Contains(path, "..") && githubReadPathRE.MatchString(path))
+	return validCIReadPath(path) || validForkReadPath(path) || (!strings.Contains(path, "..") && githubReadPathRE.MatchString(path))
 }
 
 type limitedBuffer struct{ bytes.Buffer }
