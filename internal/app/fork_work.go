@@ -174,7 +174,7 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 		if p.SyncMode == adaptedBatches && (p.PR == 0 || snapshot.Objects["pull"]["head"] != p.ValidatedHead || snapshot.Objects["pull"]["state"] != "open") {
 			return errors.New("adapted changes-ready requires the tested head on the current open PR")
 		}
-		p.Phase, p.NextAttempt = "waiting", time.Now().Add(time.Hour).Unix()
+		p.Phase, p.NextAttempt = "awaiting-review", 0
 	case "waiting":
 		p.Phase, p.NextAttempt = "waiting", time.Now().Add(15*time.Minute).Unix()
 	case "needs-decision":

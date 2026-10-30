@@ -49,7 +49,11 @@ func (s *Store) ObserveFork(ctx context.Context, spec ForkSpec, expected ForkPro
 	if p.Revision != expected.Revision {
 		return ErrStaleWork
 	}
-	next := planFork(spec, p, o, time.Now().Unix())
+	next, err := upgradeForkReviewWait(ctx, tx, spec.Key(), p)
+	if err != nil {
+		return err
+	}
+	next = planFork(spec, next, o, time.Now().Unix())
 	if !reflect.DeepEqual(next, p) {
 		next.Revision++
 		if err = writeForkProgress(ctx, tx, spec.Key(), next); err != nil {
@@ -86,6 +90,58 @@ func (s *Store) ObserveFork(ctx context.Context, spec ForkSpec, expected ForkPro
 		return err
 	}
 	return tx.Commit()
+}
+
+// Earlier changes-ready reports scheduled hourly retries just like unfinished
+// work. Recover only an unambiguous, current report and its original deadline.
+// This changes scheduling, never the evidence, test proof or completion cursor.
+func upgradeForkReviewWait(ctx context.Context, tx *database.Tx, key string, p ForkProgress) (ForkProgress, error) {
+	if p.Phase != "waiting" || p.NextAttempt == 0 || p.PR == 0 {
+		return p, nil
+	}
+	var latest []resultRecord
+	err := tx.Session(ctx).Table("ghraft_results AS r").Select("r.*").
+		Joins("JOIN ghraft_events e ON e.event_id=r.event_id").Where("e.resource_key=?", key).
+		Order("r.created_at DESC").Limit(2).Find(&latest).Error
+	if err != nil || len(latest) == 0 {
+		return p, err
+	}
+	r := latest[0]
+	// Timestamps have second precision. Do not guess which simultaneous report
+	// is authoritative, or reinterpret a later explicit waiting deadline.
+	delay := r.CreatedAt + int64(time.Hour.Seconds()) - p.NextAttempt
+	if (len(latest) > 1 && latest[1].CreatedAt == r.CreatedAt) || delay < 0 || delay > 1 {
+		return p, nil
+	}
+	var result WorkResult
+	if json.Unmarshal([]byte(r.Body), &result) != nil || result.Outcome != "changes-ready" || result.EventID != r.EventID || result.ReportID != r.ReportID || result.GuideVersion != p.ValidatedGuide {
+		return p, nil
+	}
+	var link workLinkRecord
+	err = tx.QueryRowContext(ctx, `SELECT task_id,event_id,evidence_version,guide_version FROM ghraft_work_links WHERE resource_key=?`, key).Scan(&link.TaskID, &link.EventID, &link.EvidenceVersion, &link.GuideVersion)
+	if errors.Is(err, ErrNotFound) {
+		return p, nil
+	}
+	if err != nil {
+		return p, err
+	}
+	if link.EventID != result.EventID || link.TaskID != result.TaskID || link.GuideVersion != result.GuideVersion || link.EvidenceVersion != result.EvidenceVersion {
+		return p, nil
+	}
+	var body string
+	err = tx.QueryRowContext(ctx, `SELECT s.body FROM ghraft_snapshots s JOIN ghraft_events e ON e.resource_key=s.resource_key AND e.version_hash=s.version_hash WHERE s.resource_key=? AND e.event_id=? AND e.version_hash=? AND e.state='accepted'`, key, result.EventID, result.EvidenceVersion).Scan(&body)
+	if errors.Is(err, ErrNotFound) {
+		return p, nil
+	}
+	if err != nil {
+		return p, err
+	}
+	var snapshot Snapshot
+	if json.Unmarshal([]byte(body), &snapshot) != nil || snapshot.Objects["fork"]["round"] != p.Round || snapshot.Objects["fork"]["target_sha"] != p.ValidatedBase || snapshot.Objects["pull"]["state"] != "open" || snapshot.Objects["pull"]["head"] != p.ValidatedHead || !validForkProofHead(p) || !shaRE.MatchString(p.ValidatedTree) {
+		return p, nil
+	}
+	p.Phase, p.NextAttempt = "awaiting-review", 0
+	return p, nil
 }
 
 // Preserve completed evidence and report associations when only the collector's
