@@ -57,6 +57,13 @@ func TestAdaptedForkBatchKeepsOwnerAndAdvancesOnlyAfterHumanMerge(t *testing.T) 
 		t.Fatal(err)
 	}
 	in, _ = currentForkInput(t, s)
+	if err = s.RecordWorkResult(t.Context(), WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "changes-ready", Summary: "Adapted changes delivered for human review."}); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := s.Store.ForkProgress(t.Context(), s.Config.Forks[0].Key())
+	if err != nil || ready.Phase != "awaiting-review" || ready.NextAttempt != 0 {
+		t.Fatal("adapted review wait still scheduled", ready, err)
+	}
 	check.WorkInput, check.Action, check.Ref = in, "merge", "main"
 	if _, err = s.CheckGitHubAction(t.Context(), check); !errors.Is(err, ErrWorkDenied) {
 		t.Fatal("adaptation expanded merge permission", err)

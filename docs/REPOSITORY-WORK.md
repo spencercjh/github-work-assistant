@@ -125,6 +125,39 @@ gh pr edit "$PR_NUMBER" --repo "$REPOSITORY" \
 
 该动作不修改代码，也不会生成测试证明或推进同步进度。适配模式要求已有证明仍有效，来源清单与测试时一致；仅修改表格之外的说明不必重测。它不能替代推送、创建 PR 或合入前的验证。修改可信配置仍会更新指引版本，旧工作参数需要刷新并重新关联；后续代码写入及合入验证继续遵守新的指引。
 
+## 重试已授权的单个 CI 作业
+
+持续 fork 维护中的 CI 偶发失败，可由部署者在 `config.json` 顶层添加 `fork_ci_retries`。每项只授权指定 PR、head/base、运行编号、运行次数和作业编号的一次重试；所有值都须先从当前远端状态核实。以下为配置示例：
+
+```json
+{
+  "fork_ci_retries": [{
+    "fork_id": "example-main",
+    "pr": 12,
+    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "run_id": 120,
+    "run_attempt": 1,
+    "job_id": 240
+  }]
+}
+```
+
+本入口仅支持同步 PR 触发的 `pull_request` 运行，且运行与指定作业均须处于 `completed/failure`。不支持普通 PR、`push` 或 `pull_request_target` 运行。不要把 `rerun-ci` 加入 `github_actions`；该动作没有持续授权形式。修改这项临时配置不会改变仓库指引版本，也不会失效、生成或改写源码测试证明。
+
+原负责人刷新并关联当前工作后，用最新参数检查：
+
+```bash
+"$INSTANCE/run" check-github-action "${work[@]}" \
+  --action rerun-ci --ref "$SYNC_BRANCH" \
+  --head "$HEAD_SHA" --base "$BASE_SHA" \
+  --run "$RUN_ID" --attempt "$FAILED_ATTEMPT" --job "$JOB_ID"
+```
+
+检查重新核对归属、当前 PR、同步分支、完整提交、作业所属运行和当前运行次数。仅当 `permitted=true` 时，负责人使用该仓库已获准的工具执行 `gh run rerun "$RUN_ID" --repo "$REPOSITORY" --job "$JOB_ID"`，或 Stamp 流程中的 `stamp run rerun "$RUN_ID" -R "$REPOSITORY" --job "$JOB_ID"`。GitHub 的单作业重试也会重跑依赖该作业的后续作业，见 [GitHub 重试作业接口](https://docs.github.com/en/rest/actions/workflow-runs#re-run-a-job-from-a-workflow-run)。不要省略 `--job` 或改用 `--failed` 扩大范围。
+
+检查不执行远端写入，也不提供跨系统锁。写入前再次确认运行次数未变；请求超时先查询远端，不盲目重复。成功后核对运行次数增加及指定作业的新结果，并通知部署者移除授权。次数增加、PR 关闭、提交变化、权限撤回或负责人交接后，旧检查不可复用。重试失败不自动授权下一次重试，也不改变 PR 的人工审阅和合入要求。
+
 ## 已有事项应用新委托
 
 新委托可能没有伴随新的 GitHub 活动。部署者可明确请求重新处理已关注事项，无须清空通知游标或重放全部历史：

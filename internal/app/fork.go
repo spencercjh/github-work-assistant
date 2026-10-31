@@ -114,7 +114,7 @@ func (c Config) validateForks() error {
 		}
 		accepted[key] = true
 	}
-	return nil
+	return c.validateForkCIRetries()
 }
 
 // Only progress needed to recover is persisted. Source and review bodies remain

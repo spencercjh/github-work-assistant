@@ -10,11 +10,14 @@ import (
 
 type GitHubActionInput struct {
 	WorkInput
-	Action string `json:"action"`
-	Ref    string `json:"ref,omitempty"`
-	Head   string `json:"head"`
-	Base   string `json:"base"`
-	Body   string `json:"body,omitempty"`
+	RunID      int64  `json:"run_id,omitempty"`
+	RunAttempt int    `json:"run_attempt,omitempty"`
+	JobID      int64  `json:"job_id,omitempty"`
+	Action     string `json:"action"`
+	Ref        string `json:"ref,omitempty"`
+	Head       string `json:"head"`
+	Base       string `json:"base"`
+	Body       string `json:"body,omitempty"`
 }
 
 const maxPRBodyBytes = 128 << 10
@@ -71,7 +74,13 @@ func (s *Service) CheckGitHubAction(ctx context.Context, in GitHubActionInput) (
 	if err != nil {
 		return result, err
 	}
-	if !slices.Contains(w.Guide.GitHubActions, in.Action) || w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
+	if w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
+		return result, ErrWorkDenied
+	}
+	if in.Action == "rerun-ci" {
+		return s.checkForkCIRetry(ctx, w, in)
+	}
+	if !slices.Contains(w.Guide.GitHubActions, in.Action) {
 		return result, ErrWorkDenied
 	}
 	if w.Fork != nil {

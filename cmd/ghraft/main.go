@@ -252,6 +252,9 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	report := f.String("report", "", "Actual Raft report UUID")
 	outcome := f.String("outcome", "", "investigated, changes-ready, needs-decision, waiting or merged")
 	ref := f.String("ref", "", "Exact write branch for fork maintenance")
+	runID := f.Int64("run", 0, "Exact authorized CI workflow run ID")
+	runAttempt := f.Int("attempt", 0, "Failed CI run attempt authorized for retry")
+	jobID := f.Int64("job", 0, "Exact failed CI job ID")
 	action := f.String("action", "", "Delegated GitHub action; edit-pr checks title/body updates only")
 	head := f.String("head", "", "Reviewed PR head SHA")
 	base := f.String("base", "", "Reviewed PR base SHA")
@@ -280,7 +283,7 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 			body, err = os.ReadFile(*bodyFile)
 		}
 		if err == nil {
-			result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base, Ref: *ref, Body: string(body)})
+			result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base, Ref: *ref, Body: string(body), RunID: *runID, RunAttempt: *runAttempt, JobID: *jobID})
 		}
 	case "test-worktree":
 		if _, err = svc.RefreshWorkContext(ctx, in.EventID); err == nil {
