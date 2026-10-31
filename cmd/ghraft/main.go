@@ -255,13 +255,14 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	runID := f.Int64("run", 0, "Exact authorized CI workflow run ID")
 	runAttempt := f.Int("attempt", 0, "Failed CI run attempt authorized for retry")
 	jobID := f.Int64("job", 0, "Exact failed CI job ID")
+	reviewThreadID := f.String("review-thread", "", "Exact review thread node ID for resolve-review-thread")
 	action := f.String("action", "", "Delegated GitHub action; edit-pr checks title/body updates only")
 	head := f.String("head", "", "Reviewed PR head SHA")
 	base := f.String("base", "", "Reviewed PR base SHA")
 	request := f.String("request", "", "Operator-supplied UUID; reuse for retries of the same work request")
 	reason := f.String("reason-file", "", "UTF-8 operator work request reason")
 	summaryFile := f.String("summary-file", "", "UTF-8 file containing result summary")
-	bodyFile := f.String("body-file", "", "Proposed full PR body; required for adapted fork open-pr/edit-pr checks")
+	bodyFile := f.String("body-file", "", "Full PR body for adapted open-pr/edit-pr, or fix explanation for resolve-review-thread")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -283,7 +284,7 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 			body, err = os.ReadFile(*bodyFile)
 		}
 		if err == nil {
-			result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base, Ref: *ref, Body: string(body), RunID: *runID, RunAttempt: *runAttempt, JobID: *jobID})
+			result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base, Ref: *ref, Body: string(body), RunID: *runID, RunAttempt: *runAttempt, JobID: *jobID, ReviewThreadID: *reviewThreadID})
 		}
 	case "test-worktree":
 		if _, err = svc.RefreshWorkContext(ctx, in.EventID); err == nil {

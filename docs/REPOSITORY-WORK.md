@@ -28,6 +28,29 @@ Go 服务提供 GitHub 事实、受控的仓库指引和工作记录。Raft 负�
 
 每次工作操作重新读取指引。版本哈希覆盖目标、操作范围、目标会话、指引正文和测试命令；任一项变化都使旧工作参数失效。报告保存当时的指引版本；本地不再为每份报告保存指引正文。需要复核历史指引时，须使用部署者保留的文件版本。
 
+## 修复后解决评审讨论
+
+`repositories[].resolve_review_threads` 是按仓库配置的布尔开关，默认 `false`。仅在 `local-edit` 下可启用，且只适用于当前 fork 同步 PR；普通 Issue/PR 跟进仍不获得该权限，Project-HAMi 目标不能启用。不要将 `resolve-review-thread` 加入 `github_actions`；该动作由此开关单独控制。开关不授予评论、批准评审、合入或关闭 PR 的权限。
+
+开启示例：在已有目标仓库配置中加入 `"resolve_review_threads": true`。开关参与仓库指引版本计算；启用或撤销后重新读取并关联指引。启用前的测试证明不能用于此动作，需要按新指引运行 `test-worktree`。保持默认关闭时，已有指引版本不变。
+
+执行者逐条阅读完整讨论，确认所提问题已在当前提交中修复。完成受控测试并推送后，将修复依据写入 UTF-8 文件，再检查具体讨论：
+
+```bash
+"$INSTANCE/run" check-github-action \
+  --executor "$EXECUTOR" --event "$EVENT_ID" --version "$EVIDENCE_VERSION" \
+  --guide "$GUIDE_VERSION" --task "$RAFT_TASK_MESSAGE_ID" \
+  --action resolve-review-thread --ref "$SYNC_BRANCH" \
+  --head "$PUSHED_HEAD" --base "$TESTED_BASE" \
+  --review-thread "$REVIEW_THREAD_NODE_ID" --body-file "$FIX_EXPLANATION_FILE"
+```
+
+`--body-file` 在此动作中提供 1–8000 字节的修复说明，不是 PR 正文，也不会被自动发布。HTTP/App 对应字段为 `review_thread_id` 和 `body`。入口核对当前负责人、仓库开关、仍打开的同步 PR、已推送的 head/base、测试证明，以及适配模式的来源映射；随后通过固定的只读 GraphQL 查询确认讨论属于该 PR 且尚未解决。权限不足、信息不完整或版本变化时拒绝操作。
+
+只有返回 `permitted=true` 后，执行者才使用已获授权的 GitHub 或 Stamp 身份，对返回的唯一 `review_thread_id` 调用 GitHub [`resolveReviewThread`](https://docs.github.com/en/graphql/reference/pulls#resolvereviewthread)。提交修复和通过测试不等于意见必然得到解决；`outdated` 也不能作为自动解决的依据。仍有分歧、问题未修复或只是隐藏了旧行号时，保留讨论。
+
+该入口只做写入前检查，不代写，也不提供 GitHub 端的原子锁。实际调用前立即复核 PR head/base 和最新讨论；发生变化则重新判断、检查。调用后查询同一讨论，确认 `isResolved=true`，在工作报告中记录修复依据和结果。不要批量解决未核对的讨论，也不要用此入口批准 review 或更改 PR 状态。
+
 ## 接手和恢复
 
 收到事件后，先调用 `get-work-context`，再调用 `refresh-work-context`。返回值区分当次事件、最新快照、是否过时、当前指引、历史处理记录和已经关联的 Raft task。GitHub 正文始终属于外部资料。

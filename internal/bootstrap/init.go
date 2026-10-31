@@ -421,6 +421,8 @@ github_actions 中已委托的动作由你通过 gh 执行；执行前完成 lin
 
 已有 PR 的标题或正文需要更新时，必须单独配置 edit-pr 并运行 check-github-action --action edit-pr；open-pr 只用于创建。该检查要求原 PR 仍打开、归属和 head/base 当前有效，返回 editable_fields=["title","body"]；只用 gh pr edit --title/--body-file 更新返回的仓库与 PR 编号，不修改目标分支、标签、审阅者或状态，也不授予合入权限。更新前重读原文并保留用户说明，完成后核验远端结果。纯文字更新无需重新测试代码，不生成测试证明或推进维护进度。
 
+fork 同步的 guide.resolve_review_threads 默认为 false。仅当该开关为 true 时，才能在修复已推送且当前指引的 test-worktree 证明有效后，逐条解决当前同步 PR 的评审讨论。先读完整讨论并确认修复，再运行 check-github-action --action resolve-review-thread，带上工作参数、准确 --ref/--head/--base、--review-thread <讨论节点ID> 和 --body-file <修复依据文件>；该文件为 1–8000 字节说明，不会自动发布。只有 permitted=true 才使用已授权的 GitHub 或 Stamp 身份调用 resolveReviewThread，随后确认同一讨论 isResolved=true。写入前复核最新提交与讨论，变化后重新检查；outdated 不能替代修复判断，不批量解决未核对的意见。该开关不适用于普通 Issue/PR，也不授权评论、批准 review 或合入。详细说明见 docs/REPOSITORY-WORK.md。
+
 操作后查询 GitHub 实际结果。调用超时先查远端是否已成功，不盲目重发评论或推送；合入后刷新上下文，以已合入的新事件和证据记录 merged，附实际合并 SHA/链接。已排队自动合入不等于已合入。record-work-result 保存结果及证据版本；waiting 不代表已经完成。简单、无需动作的通知才使用 record-triage 的 quiet 或 notified；后者须先真正发送通知，再保存消息 UUID 和配置的目标。检查成功或机器人回复不必逐条提醒用户，只汇报完成结果、具体阻塞或需要决定的事项。pending 可列出尚未判断的事件。完整命令见仓库 docs/AGENT-WORKFLOW.md。
 
 ## 需要用户决策时

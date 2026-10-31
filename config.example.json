@@ -30,6 +30,7 @@
       "repo": "Project-HAMi/HAMi",
       "goal": "核对公开事项的变化并在 Raft 交付有来源依据的调查结论。",
       "mode": "read-only",
+      "resolve_review_threads": false,
       "guide_file": "examples/guides/project-hami.md",
       "task_target": "#your-channel"
     }

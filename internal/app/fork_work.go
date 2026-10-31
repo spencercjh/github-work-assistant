@@ -41,7 +41,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 	if !shaRE.MatchString(in.Head) || in.Base != str(facts["target_sha"]) {
 		return result, ErrStaleWork
 	}
-	if in.Action == "push" || in.Action == "open-pr" || in.Action == "merge" || (p.SyncMode == adaptedBatches && in.Action == "edit-pr") {
+	if in.Action == "push" || in.Action == "open-pr" || in.Action == "merge" || in.Action == "resolve-review-thread" || (p.SyncMode == adaptedBatches && in.Action == "edit-pr") {
 		if p.ValidatedHead != in.Head || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != in.Base || !validForkProofHead(*p) || !shaRE.MatchString(p.ValidatedTree) {
 			return result, errors.New("run test-worktree for this commit, target and guide before writing")
 		}
@@ -100,9 +100,12 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 		if p.PR != 0 || str(facts["remote_head"]) != in.Head {
 			return result, errors.New("push the validated commit first; reuse an existing sync PR")
 		}
-	case "edit-pr":
+	case "edit-pr", "resolve-review-thread":
 		if p.PR == 0 || pull["state"] != "open" || pull["merged"] != false || pull["head"] != in.Head || pull["base_sha"] != in.Base || str(facts["remote_head"]) != in.Head || pull["head_ref"] != p.Branch || pull["base"] != f.Target.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
-			return result, errors.New("metadata updates require the current open sync PR and its exact branches and revisions")
+			return result, errors.New("PR updates require the current open sync PR and its exact branches and revisions")
+		}
+		if in.Action == "resolve-review-thread" {
+			return s.checkForkReviewThread(ctx, w, in)
 		}
 		result = prMetadataCheck(in, f.Target.Repo, p.PR)
 		result.Branch, result.TargetBranch = p.Branch, f.Target.Branch
