@@ -125,6 +125,9 @@ func (s *Service) FinishWork(ctx context.Context, in WorkInput, update func(cont
 	if !sameExecutor(state, in.Executor) || (state.Status != "in_progress" && state.Status != "in_review" && state.Status != "done") {
 		return result, ErrClaimUnavailable
 	}
+	if w.Fork != nil && state.Status != "in_progress" {
+		return result, ErrClaimUnavailable
+	}
 	w, err = s.RefreshWorkContext(ctx, in.EventID)
 	if err != nil {
 		return result, err
@@ -145,6 +148,18 @@ func (s *Service) FinishWork(ctx context.Context, in WorkInput, update func(cont
 			return result, errors.New("finish-work requires every event to be delivered and handled; inspect pending events for this maintenance work and explicitly record superseded when a current report covers an older event")
 		}
 		return result, errors.New("finish-work requires all delivered events to be handled and a final result; waiting is not completion")
+	}
+	if w.Fork != nil {
+		// A batch result is not the lifecycle of continuous maintenance. Never
+		// change its task status, including after a human pauses/stops it.
+		state, err = s.Raft.readTask(ctx, root.Channel, root.Number, root.MessageID)
+		if err != nil {
+			return result, err
+		}
+		if !sameExecutor(state, in.Executor) || state.Status != "in_progress" {
+			return result, ErrClaimUnavailable
+		}
+		return TaskFinish{Task: root, Status: "in_progress"}, nil
 	}
 	result = TaskFinish{Task: root, Status: "in_review"}
 	if ended {

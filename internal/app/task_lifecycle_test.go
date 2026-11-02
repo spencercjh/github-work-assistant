@@ -453,12 +453,44 @@ func TestFinishForkRoundKeepsMaintenanceTaskOpen(t *testing.T) {
 	quietEvent(t, s, in.EventID)
 	var calls []string
 	got, err := s.FinishWork(t.Context(), in, updateFixtureTask(t, f, &calls))
-	if err != nil || got.Status != "in_review" {
+	if err != nil || got.Status != "in_progress" || len(calls) != 0 || f.status != "in_progress" {
 		t.Fatal("maintenance task completed", got, err)
 	}
 	if githubEnded(canonical(Snapshot{Objects: Objects{"fork": {"phase": "synced"}, "pull": {"state": "closed", "merged": true}}})) {
 		t.Fatal("merged sync PR ended long-lived maintenance")
 	}
+}
+
+func TestFinishForkDoesNotChangeHumanStatusOrNewOwner(t *testing.T) {
+	for _, change := range []string{"in_review", "done", "closed", "owner", "during refresh"} {
+		t.Run(change, func(t *testing.T) {
+			s, _, owner := forkFixture(t)
+			in, _ := currentForkInput(t, s)
+			quietEvent(t, s, in.EventID)
+			switch change {
+			case "owner":
+				owner.owner = "successor"
+			case "during refresh":
+				s.Store = &finishForkStatusChange{Persistence: s.Store, owner: owner}
+			default:
+				owner.status = change
+			}
+			var calls []string
+			if _, err := s.FinishWork(t.Context(), in, updateFixtureTask(t, owner, &calls)); !errors.Is(err, ErrClaimUnavailable) || len(calls) != 0 {
+				t.Fatal("fork finish altered owner/status", err, calls)
+			}
+		})
+	}
+}
+
+type finishForkStatusChange struct {
+	Persistence
+	owner *taskAPI
+}
+
+func (s *finishForkStatusChange) CompletionReady(ctx context.Context, key, event string, terminal bool) (bool, error) {
+	s.owner.status = "closed"
+	return s.Persistence.CompletionReady(ctx, key, event, terminal)
 }
 
 func TestCompletionRecoversSnapshotsWithoutCurrentEventIndex(t *testing.T) {

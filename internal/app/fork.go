@@ -120,33 +120,34 @@ func (c Config) validateForks() error {
 // Only progress needed to recover is persisted. Source and review bodies remain
 // in the current snapshot, while old reports follow ordinary retention rules.
 type ForkProgress struct {
-	AdaptationBaseline string   `json:"adaptation_baseline,omitempty"`
-	SyncMode           string   `json:"sync_mode,omitempty"`
-	BatchAfter         string   `json:"batch_after,omitempty"`
-	BatchCommits       []string `json:"batch_commits,omitempty"`
-	BatchReason        string   `json:"batch_reason,omitempty"`
-	PrivateRepos       []string `json:"private_repositories,omitempty"`
-	Revision           int64    `json:"revision"`
-	SpecVersion        string   `json:"spec_version"`
-	Round              string   `json:"round"`
-	Phase              string   `json:"phase"`
-	Upstream           string   `json:"upstream_sha"`
-	InitialTarget      string   `json:"initial_target_sha"`
-	ObservedUpstream   string   `json:"observed_upstream_sha"`
-	Branch             string   `json:"sync_branch"`
-	PR                 int      `json:"pr"`
-	LastSuccess        string   `json:"last_success_upstream_sha"`
-	ValidatedHead      string   `json:"validated_head"`
-	ValidatedBase      string   `json:"validated_base"`
-	ValidatedTree      string   `json:"validated_tree"`
-	ValidatedGuide     string   `json:"validated_guide"`
-	ValidatedMapping   string   `json:"validated_mapping,omitempty"`
-	ValidatedPRSection string   `json:"validated_pr_section,omitempty"`
-	TestLog            string   `json:"test_log,omitempty"`
-	TestLogHash        string   `json:"test_log_hash,omitempty"`
-	NextAttempt        int64    `json:"next_attempt"`
-	Retries            int      `json:"retries"`
-	Wake               int      `json:"wake"`
+	AdaptationBaseline string          `json:"adaptation_baseline,omitempty"`
+	SyncMode           string          `json:"sync_mode,omitempty"`
+	BatchAfter         string          `json:"batch_after,omitempty"`
+	BatchCommits       []string        `json:"batch_commits,omitempty"`
+	BatchReason        string          `json:"batch_reason,omitempty"`
+	PrivateRepos       []string        `json:"private_repositories,omitempty"`
+	Revision           int64           `json:"revision"`
+	SpecVersion        string          `json:"spec_version"`
+	Round              string          `json:"round"`
+	Phase              string          `json:"phase"`
+	Upstream           string          `json:"upstream_sha"`
+	InitialTarget      string          `json:"initial_target_sha"`
+	ObservedUpstream   string          `json:"observed_upstream_sha"`
+	Branch             string          `json:"sync_branch"`
+	PR                 int             `json:"pr"`
+	LastSuccess        string          `json:"last_success_upstream_sha"`
+	ValidatedHead      string          `json:"validated_head"`
+	ValidatedBase      string          `json:"validated_base"`
+	ValidatedTree      string          `json:"validated_tree"`
+	ValidatedGuide     string          `json:"validated_guide"`
+	ValidatedMapping   string          `json:"validated_mapping,omitempty"`
+	ValidatedPRSection string          `json:"validated_pr_section,omitempty"`
+	TestLog            string          `json:"test_log,omitempty"`
+	TestLogHash        string          `json:"test_log_hash,omitempty"`
+	Validation         *ForkValidation `json:"validation,omitempty"`
+	NextAttempt        int64           `json:"next_attempt"`
+	Retries            int             `json:"retries"`
+	Wake               int             `json:"wake"`
 }
 
 type ForkObservation struct {
@@ -281,6 +282,9 @@ func planFork(spec ForkSpec, p ForkProgress, o ForkObservation, now int64) ForkP
 	if pull := o.Objects["pull"]; pull != nil && pull["state"] == "closed" && pull["merged"] != true {
 		p.Phase, p.NextAttempt = "needs-decision", 0
 	}
+	if recoverForkValidation(&p, now) {
+		return p
+	}
 	if p.NextAttempt > 0 && now >= p.NextAttempt {
 		p.Wake++
 		p.Retries++
@@ -382,6 +386,9 @@ func (r *Raft) forkNotice(ev Event, f ForkSpec) (eventNotice, error) {
 	for _, c := range p.Changes {
 		if c.Object == "fork" && c.After != nil {
 			a := obj(c.After)
+			if before := obj(c.Before); before != nil && before["wake"] != a["wake"] {
+				lines = append(lines, "自动续接检查已到期。先读取当前 fork.validation、日志和已保存证明；测试仍运行时不要重复启动，中断不能视为通过。")
+			}
 			if a["sync_mode"] == adaptedBatches {
 				commits, _ := a["batch_commits"].([]any)
 				lines = append(lines, fmt.Sprintf("本批按上游主线顺序移植 %d 项变更。", len(commits)))

@@ -92,12 +92,15 @@ func (r *Raft) appendDiscussion(ctx context.Context, ev Event, root TaskDispatch
 		}
 	}
 	var instruction string
+	_, fork := r.Config.Fork(ev.Key)
 	quietDone := false
 	switch state.Status {
 	case "closed":
 		instruction = "原任务已关闭。本条仅追加变化记录；等待用户明确恢复，不自动重新认领或另建任务。"
 	case "done", "in_review":
-		if owner == "" {
+		if fork {
+			instruction = "持续 fork 维护任务应保持 in_progress。当前状态不允许执行；请核对用户的最新指示并报告状态不符，不自动切换状态、另建任务或绕过归属检查。"
+		} else if owner == "" {
 			instruction = "原任务已结束且没有负责人，请用户指定负责人后再恢复；不要重新竞争或另建任务。"
 		} else {
 			instruction = "继续由原负责人处理。先读取原任务及新消息，将原任务恢复为 in_progress，再核验 verify-claim；任务完成不解除负责人。"
@@ -128,7 +131,11 @@ func (r *Raft) appendDiscussion(ctx context.Context, ev Event, root TaskDispatch
 	}
 	if state.Status != "closed" && state.OwnerType != "user" {
 		if !quietDone {
-			instruction += " 处理完全部事件后使用 finish-work 收尾：普通 PR/Issue 已结束时自动 Done，仍打开或持续 fork 维护时保持 in_review。"
+			if fork {
+				instruction += " 持续 fork 任务始终保持 in_progress，不因等待、审阅或单批合入切换状态；finish-work 只核验事件处理记录。"
+			} else {
+				instruction += " 处理完全部事件后使用 finish-work 收尾：普通 PR/Issue 已结束时自动 Done，仍打开时保持 in_review。"
+			}
 		}
 		instruction += " " + decisionInstruction
 	}

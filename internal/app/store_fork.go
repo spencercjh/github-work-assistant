@@ -202,6 +202,13 @@ func (s *Store) saveForkProgress(ctx context.Context, key string, revision int64
 	if p.Revision != revision || p.Round != next.Round || p.SpecVersion != next.SpecVersion {
 		return ErrStaleWork
 	}
+	// Heartbeats intentionally do not advance the semantic revision. Preserve
+	// the latest heartbeat when saving a progress copy read before that tick.
+	if p.Validation != nil && next.Validation != nil && p.Validation.ID == next.Validation.ID && p.Validation.HeartbeatAt > next.Validation.HeartbeatAt {
+		v := *next.Validation
+		v.HeartbeatAt = p.Validation.HeartbeatAt
+		next.Validation = &v
+	}
 	if result != nil || expectedVersion != "" {
 		var version string
 		if err = tx.QueryRowContext(ctx, `SELECT version_hash FROM ghraft_snapshots WHERE resource_key=?`, key).Scan(&version); err != nil {
@@ -215,6 +222,22 @@ func (s *Store) saveForkProgress(ctx context.Context, key string, revision int64
 		if err = saveReport(ctx, tx, result.EventID, result.ReportID, canonical(result)); err != nil {
 			return err
 		}
+		if next.Validation != nil && next.Validation.State != "running" && next.Validation.HandledAt == 0 {
+			v := *next.Validation
+			v.HandledAt = time.Now().Unix()
+			next.Validation = &v
+		}
+	} else if expectedVersion != "" {
+		// Only this still-live attempt can complete; heartbeat expiration and
+		// replacement runs fence late writers independently of snapshot checks.
+		v := p.Validation
+		if v == nil || v.State != "running" || next.Validation == nil || next.Validation.ID != v.ID || v.Round != next.Round || v.Head != next.ValidatedHead || v.Base != next.ValidatedBase || v.Guide != next.ValidatedGuide || v.Log != next.TestLog || time.Now().Unix() >= v.Deadline || time.Now().Unix() >= v.HeartbeatAt+int64(forkTestLease.Seconds()) {
+			return ErrStaleWork
+		}
+		completed := *v
+		completed.State, completed.FinishedAt = "passed", time.Now().Unix()
+		next.Validation = &completed
+		next.NextAttempt = completed.FinishedAt + int64(forkTestFollowup.Seconds())
 	}
 	next.Revision = revision + 1
 	if err = writeForkProgress(ctx, tx, key, next); err != nil {

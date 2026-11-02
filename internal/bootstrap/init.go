@@ -381,7 +381,7 @@ func executorGuide(root, notify, channel, decisionMaker string) string {
 
     raft task claim --target %s --number <本任务编号>
 
-认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。原任务为 in_review 且出现新事件时，由原负责人先读取新消息，再将同一任务恢复为 in_progress。原任务为 done 时，先读 work-context：普通 PR/Issue 的新增动态无需行动时，原负责人直接 record-triage --outcome quiet，保持 Done，无需调用 finish-work；即使 GitHub 仍打开，也不因此重开任务。GitHub 重新打开、可信 work.requested 请求或确需行动时才恢复同一任务。closed 表示用户停止这项工作，必须等用户明确恢复。任务归人类或负责人不在频道时，等待人工交接，不代为认领。
+认领成功才开始工作。已被别人认领是正常结果：静默结束，不重试争抢、不另建任务、不向用户报错。网络失败、权限不足、未知状态不是竞争失败，应保留错误并排查。不能只看命令退出码；必须检查认领结果。普通 PR/Issue 的原任务为 in_review 且出现新事件时，由原负责人先读取新消息，再将同一任务恢复为 in_progress。原任务为 done 时，先读 work-context：普通 PR/Issue 的新增动态无需行动时，原负责人直接 record-triage --outcome quiet，保持 Done，无需调用 finish-work；即使 GitHub 仍打开，也不因此重开任务。GitHub 重新打开、可信 work.requested 请求或确需行动时才恢复同一任务。closed 表示用户停止这项工作，必须等用户明确恢复。任务归人类或负责人不在频道时，等待人工交接，不代为认领。
 
 认领后以 raft auth whoami 确认自己的稳定名称，并运行：
 
@@ -395,7 +395,7 @@ record-triage、link-task、record-work-result、prepare-worktree、verify-workt
 
     %s finish-work --event <最新事件ID> --executor @你的名称 --version <当前证据版本> --guide <当前指引版本> --task <discussion.messageId>
 
-finish-work 会刷新 GitHub 状态，核对全部事件已经送达并处理，再通过你当前身份的 raft CLI 更新原任务：普通 PR 已合并或关闭、Issue 已关闭时为 done，无需用户再次确认；仍打开或持续 fork 维护为 in_review。仅保存 waiting、needs-decision 或 changes-ready 不能完成已结束的事项，需先核实并保存最终判断。不要在命令成功后又手工改回 in_review；它只更新固定通知任务，不完成另行关联的工程任务。刷新发现新事件时先处理新事件；未读消息拦截时先阅读并遵守该消息，不绕过拦截。结果不确定时核对远端实际状态，再用相同参数重试。命令必须运行在原负责人的 Raft 环境中，不使用采集器身份替代。
+finish-work 会刷新 GitHub 状态，核对全部事件已经送达并处理，再通过你当前身份的 raft CLI 更新原任务：普通 PR 已合并或关闭、Issue 已关闭时为 done，无需用户再次确认；普通 PR/Issue 仍打开时为 in_review；持续 fork 维护任务始终保持 in_progress，finish-work 只核验处理记录，不写入任务状态。仅保存 waiting、needs-decision 或 changes-ready 不能完成已结束的事项，需先核实并保存最终判断。不要在命令成功后又手工改回 in_review；它只更新固定通知任务，不完成另行关联的工程任务。刷新发现新事件时先处理新事件；未读消息拦截时先阅读并遵守该消息，不绕过拦截。结果不确定时核对远端实际状态，再用相同参数重试。命令必须运行在原负责人的 Raft 环境中，不使用采集器身份替代。
 
 升级后，已结束且处理完毕但仍在 in_review 的事项会在原讨论收到一次收尾请求，按同样步骤完成。任务完成仍保留负责人。只有用户明确要求才交接：先让原负责人停止，再由有权限的用户在原任务上 assign 给接手者。程序不会自动 unclaim、改派或重开 closed 任务；执行者也不得因完成、离线或超时自行交接。升级时需要 adopt-discussion 选择历史任务的操作由部署者明确决定，执行者不能自行选择。
 `, channel, shellQuote(channel), shellQuote(filepath.Join(root, "run")), shellQuote(filepath.Join(root, "run")))
@@ -436,6 +436,10 @@ fork 同步的 guide.resolve_review_threads 默认为 false。仅当该开关为
 仅等待 CI、自动检查或外部反馈时记录 waiting，不要求用户决策。普通进展和无需决策的完成结果不提及用户。同一个未决问题只提醒一次；后续事件仍受它阻塞时引用已有请求并记录 needs-decision，不另发一条相同提及。用户回答后，按新的决定继续工作并记录新的处理结果；不得把旧请求复用于另一个问题。
 
 ## 持续维护有定制改动的 fork
+
+持续 fork 维护任务首次认领后始终保持 in_progress，不因等待 CI、人工审阅或单批合入切换到 in_review/done。若实时状态不符，核对用户最新指示，不自动切换。长测试或其他跨会话等待前安排锚定原讨论的 Raft 恢复提醒，完成后取消；触发时先查进程、日志和证明，避免重复执行。
+
+test-worktree 开始前持久保存 fork.validation，每 30 秒更新心跳并持续写日志。采集器确认心跳失联超过 2 分钟或运行期限届满后，通过原任务唤醒负责人；已结束但 5 分钟未记录后续处理结果也会续接。投递依赖采集器和访问检查，不保证故障期间即时送达。恢复时先读 work-context；运行中不重复测试，中断不能算通过。没有有效证明时刷新、关联并完整重测。已提交人工审阅的状态不触发此类恢复。
 
 work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha、sync_branch 和已有 pr。按可信仓库指引理解定制能力，核对上游改动对它的影响；本轮提交固定，新上游更新留到下一轮。同步 PR 的评审和检查仍属于这项维护工作，不另建任务。
 

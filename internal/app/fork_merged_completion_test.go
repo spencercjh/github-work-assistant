@@ -117,7 +117,7 @@ func TestSyncedMergeCanReconcileExistingNotifications(t *testing.T) {
 		}
 	}
 	var calls []string
-	if got, err := s.FinishWork(t.Context(), current, updateFixtureTask(t, owner, &calls)); err != nil || got.Status != "in_review" {
+	if got, err := s.FinishWork(t.Context(), current, updateFixtureTask(t, owner, &calls)); err != nil || got.Status != "in_progress" {
 		t.Fatal("could not finish covered work", got, err)
 	}
 	history, err := s.Store.History(t.Context(), s.Config.Forks[0].Key())
@@ -137,7 +137,7 @@ func TestSyncedMergeCanReconcileExistingNotifications(t *testing.T) {
 	// Restarts and repeated finishing preserve both the result and ownership.
 	reopened := openTestStore(t)
 	s.Store, s.Raft.Store = reopened, reopened
-	if _, err = s.FinishWork(t.Context(), current, updateFixtureTask(t, owner, &calls)); err != nil || len(calls) != 1 {
+	if _, err = s.FinishWork(t.Context(), current, updateFixtureTask(t, owner, &calls)); err != nil || len(calls) != 0 {
 		t.Fatal("restart lost or repeated completion", err, calls)
 	}
 }
