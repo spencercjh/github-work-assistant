@@ -387,7 +387,7 @@ func (r *Raft) forkNotice(ev Event, f ForkSpec) (eventNotice, error) {
 		if c.Object == "fork" && c.After != nil {
 			a := obj(c.After)
 			if before := obj(c.Before); before != nil && before["wake"] != a["wake"] {
-				lines = append(lines, "自动续接检查已到期。先读取当前 fork.validation、日志和已保存证明；测试仍运行时不要重复启动，中断不能视为通过。")
+				lines = append(lines, "定时跟进检查已到期。请核对当前维护进度、fork.validation、日志和 PR/CI 状态；输入未变且证明仍有效时无需重测，测试仍运行时不要重复启动，中断不能视为通过。")
 			}
 			if a["sync_mode"] == adaptedBatches {
 				commits, _ := a["batch_commits"].([]any)

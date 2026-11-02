@@ -116,6 +116,50 @@ func TestForkValidationRecoveryRespectsLiveRunsAndReportedWaits(t *testing.T) {
 	}
 }
 
+func TestHandledForkValidationRetryUsesGeneralFollowupNotice(t *testing.T) {
+	for _, mode := range []string{"original", "adapted"} {
+		t.Run(mode, func(t *testing.T) {
+			s, g, owner, in, w, ws := forkRetryFixture(t, mode)
+			proof, err := s.TestWorkspace(t.Context(), in)
+			if err != nil || !proof.Passed {
+				t.Fatal("validation failed", proof, err)
+			}
+			g.pr, g.remoteHead, g.prBranch = 7, ws.Head, w.Fork.Branch
+			if err = s.Collect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			in, w = currentForkInput(t, s)
+			if err = s.RecordWorkResult(t.Context(), WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "waiting", Summary: "Validation passed and handled; waiting for remote CI."}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := s.Store.ForkProgress(t.Context(), w.Event.Key)
+			if err != nil || before.Validation == nil || before.Validation.State != "passed" || before.Validation.HandledAt == 0 {
+				t.Fatal("validation result was not handled", before.Validation, err)
+			}
+			expireForkRetry(t, s.Store.(*Store), w.Event.Key)
+			if err = s.Collect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			after, err := s.WorkContext(t.Context(), in.EventID)
+			if err != nil || after.CurrentEventID == in.EventID || after.Fork.Wake != before.Wake+1 || after.Fork.Retries != before.Retries+1 || after.Fork.Phase != "waiting" {
+				t.Fatal("ordinary CI follow-up did not fire", after.Fork, err)
+			}
+			if !reflect.DeepEqual(after.Fork.Validation, before.Validation) || after.Fork.Validation.NotifiedAt != 0 || after.Fork.ValidatedHead != before.ValidatedHead || after.Fork.ValidatedTree != proof.Tree || after.Fork.TestLogHash != proof.LogHash {
+				t.Fatal("CI follow-up changed handled validation or proof", after.Fork)
+			}
+			ev, err := s.Store.Event(t.Context(), after.CurrentEventID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			deliverEvent(t, s, ev)
+			notice := owner.updates["github-update:"+ev.ID]
+			if owner.creates != 1 || !strings.Contains(notice, "@worker") || !strings.Contains(notice, "定时跟进检查已到期") || !strings.Contains(notice, "PR/CI") || strings.Contains(notice, "自动续接检查已到期") {
+				t.Fatal("CI follow-up misreported validation recovery", notice)
+			}
+		})
+	}
+}
+
 func TestForkValidationHeartbeatIsFencedAndDoesNotChangeEvidence(t *testing.T) {
 	s, _, _ := forkFixture(t)
 	in, w := currentForkInput(t, s)
