@@ -21,7 +21,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 | 网络失败、权限不足、状态不明确 | 不执行，保留错误并排查；不能解释成其他人已经接手。 |
 | 之前已由自己认领 | 重新读取任务，确认当前仍由自己负责且为 `in_progress` 后恢复。 |
 
-当原任务为 `in_review` 且出现未处理的新事件时，由原负责人先读取完整讨论，再用 `raft task update` 将同一任务恢复为 `in_progress`，随后核验归属。任务为 `done` 时，先读取 `work-context`：普通 PR/Issue 的新增动态无需行动时，原负责人直接保存 `quiet` 判断，保持 Done，无需调用 `finish-work`；即使 GitHub 仍打开，也不因此重开任务。GitHub 重新打开、可信 `work.requested` 请求或确需行动时才恢复同一任务。`closed` 表示停止工作，只追加变化记录，等待用户明确恢复。不能因负责人离线就改派。
+普通 PR/Issue 的原任务为 `in_review` 且出现未处理的新事件时，由原负责人先读取完整讨论，再用 `raft task update` 将同一任务恢复为 `in_progress`，随后核验归属。任务为 `done` 时，先读取 `work-context`：普通 PR/Issue 的新增动态无需行动时，原负责人直接保存 `quiet` 判断，保持 Done，无需调用 `finish-work`；即使 GitHub 仍打开，也不因此重开任务。GitHub 重新打开、可信 `work.requested` 请求或确需行动时才恢复同一任务。`closed` 表示停止工作，只追加变化记录，等待用户明确恢复。不能因负责人离线就改派。持续 fork 维护任务首次认领后始终保持 `in_progress`；等待 CI、人工审阅和单批合入只改变维护记录。若实时任务状态不符，核对用户最新指示，不自动切换状态或重新认领。
 
 通过 `raft auth whoami` 确认自己的稳定名称，再运行：
 
@@ -54,11 +54,11 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 | --- | --- |
 | 普通 PR 已合并或关闭；Issue 已关闭 | `done`，无需用户再次确认 |
 | PR/Issue 仍打开 | `in_review`，等待后续进展 |
-| 持续 fork 维护，包括同步 PR 已合并 | `in_review`，保留持续维护工作 |
+| 持续 fork 维护，包括同步 PR 已合并 | 保持 `in_progress`；只核验处理记录，不写入任务状态 |
 
 自动 Done 还要求最新事件有 `quiet`／`notified` 判断或 `investigated`／`merged` 最终报告。仅记录 `waiting`、`needs-decision` 或 `changes-ready` 不足以完成已结束的事项。结束后的普通评论或检查更新只需原负责人核对并记录 `quiet`，不用反复重开任务；发现需要行动的后续事项再恢复。
 
-命令成功后不要再手工改回 `in_review`。它只更新固定通知任务，不会完成另行关联的工程任务，也不修改负责人、人类负责的任务或手工 `closed` 的任务。调用者需要可用的 Raft CLI 和自身身份；不能使用采集器凭据替代。此命令只用于本机共享模式，App／单人 DM 流程仍按原约定收尾。
+命令成功后不要再手工改回 `in_review`。对普通 PR/Issue，它只更新固定通知任务，不会完成另行关联的工程任务，也不修改负责人、人类负责的任务或手工 `closed` 的任务。调用者需要可用的 Raft CLI 和自身身份；不能使用采集器凭据替代。此命令只用于本机共享模式，App／单人 DM 流程仍按原约定收尾。
 
 若刷新产生新事件，先处理并确认新事件投递，再以新参数收尾。若 Raft 拦截未读消息，先阅读并遵守讨论中的新指令，不绕过拦截。调用超时后核对任务实际状态，再用相同参数重试；命令会检查已完成的写入。GitHub 重开与收尾并发时，程序会尝试恢复处理状态；中断后，采集器会在原讨论补发一次恢复请求，仍由原负责人执行。
 
@@ -79,7 +79,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 `coverage.txt` 应说明旧事件中的哪些变化已处理，以及它们如何对应到新报告。程序要求两条事件已投递、属于同一维护事项，报告由当前负责人保存并匹配最新证据、当前指引和关联记录。`waiting`／`needs-decision` 报告、未投递事件、显式工作请求及过期证据不能通过这条路径归档。新事件或请求到达时，需要重新核对上下文。
 
-覆盖记录保留旧事件与报告的关联，不修改既有报告、不推进上游同步位置，也不授予合入权限。已经有 `waiting` 等报告的旧事件无需补写最终结果；它们已经有处理记录。处理完剩余事件后，再以最新参数运行 `finish-work`，持续维护仍保持 `in_review`。
+覆盖记录保留旧事件与报告的关联，不修改既有报告、不推进上游同步位置，也不授予合入权限。已经有 `waiting` 等报告的旧事件无需补写最终结果；它们已经有处理记录。处理完剩余事件后，再以最新参数运行 `finish-work`，持续 fork 维护仍保持 `in_progress`。
 
 ## External Agent 本机模式
 
@@ -132,7 +132,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 报告通过 Raft 原任务线程发送，保存该消息完整 UUID。已关联任务的资源使用 `record-work-result`，写入事件与指引版本、Raft task 根消息 UUID、报告 UUID 和简短结论。旧的未关联调查仍可使用 `record-result`。回执只说明关联保存成功，不是任务完成认证。
 
-最后把自己负责的 task 更新为 `in_review`，请求者确认后才改 `done`。需要未来复查时由负责 Agent 创建锚定任务的 Raft reminder；任务交接时明确提醒归属，不假定提醒自动转移。
+普通开发任务最后更新为 `in_review`，请求者确认后才改 `done`。持续 fork 维护任务始终保持 `in_progress`。需要未来复查时由负责 Agent 创建锚定任务的 Raft reminder；任务交接时明确提醒归属，不假定提醒自动转移。
 
 ## 本机 App 调用
 

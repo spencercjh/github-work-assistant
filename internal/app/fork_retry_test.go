@@ -52,7 +52,7 @@ func TestForkValidationSurvivesRetryWake(t *testing.T) {
 				t.Fatal("retry wake discarded passing validation", proof, err)
 			}
 			p, err := store.ForkProgress(t.Context(), w.Event.Key)
-			if err != nil || p.Wake != w.Fork.Wake+1 || p.Retries != w.Fork.Retries+1 || p.Phase != "waiting" || p.NextAttempt <= time.Now().Unix() || p.ValidatedHead != ws.Head || p.ValidatedBase != g.target || p.ValidatedTree != proof.Tree || p.TestLogHash != proof.LogHash {
+			if err != nil || p.Wake != w.Fork.Wake+1 || p.Retries != w.Fork.Retries+1 || p.Phase != "working" || p.NextAttempt <= time.Now().Unix() || p.ValidatedHead != ws.Head || p.ValidatedBase != g.target || p.ValidatedTree != proof.Tree || p.TestLogHash != proof.LogHash {
 				t.Fatal("proof or retry progress lost", p, err)
 			}
 			// Saving a local test result does not authorize writes with the

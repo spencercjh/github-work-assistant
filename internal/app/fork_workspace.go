@@ -236,6 +236,7 @@ func cleanCommitted(ctx context.Context, path string) error {
 }
 
 type WorkspaceTest struct {
+	Attempt    string `json:"attempt,omitempty"`
 	Head       string `json:"head"`
 	Tree       string `json:"tree"`
 	Base       string `json:"base"`
@@ -247,8 +248,7 @@ type WorkspaceTest struct {
 
 // Test commands come only from the trusted local guide. Tests still execute
 // repository code: this is a credential-reduced process, not an OS sandbox.
-func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTest, error) {
-	var result WorkspaceTest
+func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result WorkspaceTest, retErr error) {
 	w, err := s.CheckWork(ctx, in)
 	if err != nil {
 		return result, err
@@ -278,12 +278,59 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	if len(w.Guide.TestCommands) == 0 {
 		return result, errors.New("no regression commands configured")
 	}
+	result.Head, result.Base = workspace.Head, workspace.Base
+	result.Log = metadata + fmt.Sprintf(".test-%d.log", time.Now().UnixNano())
+	result.Attempt = hash([]byte(result.Log))
+	log, err := os.OpenFile(result.Log, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return result, err
+	}
+	defer log.Close()
+	output := &validationLog{dst: log}
+	fmt.Fprintf(output, "attempt: %s\nsource: %s\ntarget: %s\n", result.Attempt, result.Head, result.Base)
+	if err = output.Error(); err != nil {
+		return result, err
+	}
+	if err = log.Sync(); err != nil {
+		return result, err
+	}
+	testCtx, cancel := context.WithTimeout(ctx, forkTestTimeout)
+	defer cancel()
+	ctx = testCtx
 	p := *w.Fork
 	p.ValidatedHead, p.ValidatedBase, p.ValidatedTree, p.ValidatedGuide, p.TestLog, p.TestLogHash = "", "", "", "", "", ""
 	p.ValidatedMapping, p.ValidatedPRSection = "", ""
+	now := time.Now()
+	p.Validation = &ForkValidation{ID: result.Attempt, Round: p.Round, Head: result.Head, Base: result.Base, Guide: in.GuideVersion, Log: result.Log, State: "running", StartedAt: now.Unix(), HeartbeatAt: now.Unix(), Deadline: now.Add(forkTestTimeout + forkTestLease).Unix()}
+	// Starting validation resumes execution, even after an earlier review wait.
+	p.Phase, p.NextAttempt = "working", p.Validation.Deadline
 	if err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil); err != nil {
 		return result, err
 	}
+	key, round := w.Event.Key, p.Round
+	stopHeartbeat := s.keepForkValidation(ctx, key, round, result.Attempt, cancel)
+	defer func() {
+		stopHeartbeat()
+		if retErr == nil {
+			return
+		}
+		fmt.Fprintf(output, "validation did not save a passing proof: %v\n", retErr)
+		_ = log.Sync()
+		if logged, e := os.ReadFile(result.Log); e == nil {
+			result.LogHash = hash(logged)
+		}
+		state := "failed"
+		if ctx.Err() != nil {
+			state = "interrupted"
+		}
+		// Cancellation must not prevent recording the interruption. SIGKILL is
+		// covered separately by the persisted heartbeat/deadline.
+		c, end := context.WithTimeout(context.Background(), 5*time.Second)
+		defer end()
+		if e := s.Store.UpdateForkValidation(c, key, round, result.Attempt, state); e != nil && !errors.Is(e, ErrStaleWork) {
+			retErr = errors.Join(retErr, fmt.Errorf("record validation interruption: %w", e))
+		}
+	}()
 	var mappingHash, prSection string
 	f, _ := s.Config.Fork(w.Event.Key)
 	if p.SyncMode == adaptedBatches {
@@ -292,7 +339,6 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 			return result, err
 		}
 	}
-	result.Head, result.Base = workspace.Head, workspace.Base
 	testPath, cleanup, err := s.forkTestWorktree(ctx, workspace)
 	if err != nil {
 		return result, err
@@ -302,40 +348,45 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 	if err != nil {
 		return result, err
 	}
-	result.Log = metadata + fmt.Sprintf(".test-%d.log", time.Now().UnixNano())
-	log, err := os.OpenFile(result.Log, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return result, err
-	}
-	defer log.Close()
 	home, err := os.MkdirTemp(s.Config.WorkspaceRoot, "test-home-")
 	if err != nil {
 		return result, err
 	}
 	defer os.RemoveAll(home)
-	testCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
-	defer cancel()
-	var output limitedBuffer
-	fmt.Fprintf(&output, "source: %s\ntarget: %s\nmerge tree: %s\n", result.Head, result.Base, result.Tree)
+	fmt.Fprintf(output, "merge tree: %s\n", result.Tree)
 	for _, argv := range w.Guide.TestCommands {
-		fmt.Fprintf(&output, "command: %s\n", string(canonical(argv)))
+		fmt.Fprintf(output, "command: %s\n", string(canonical(argv)))
 		cmd := exec.CommandContext(testCtx, argv[0], argv[1:]...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			// Trusted test wrappers often spawn compilers and test workers.
+			// Cancel the group so an interrupted wrapper does not leave them
+			// running after its workspace lock has been released.
+			err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
 		cmd.Dir = testPath
 		cmd.WaitDelay = 5 * time.Second
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "LANG=C.UTF-8", "CI=true", "PYTHONDONTWRITEBYTECODE=1"}
-		cmd.Stdout, cmd.Stderr = &output, &output
+		cmd.Stdout, cmd.Stderr = output, output
 		if err = cmd.Run(); err != nil {
 			break
 		}
 	}
-	_, writeErr := log.Write(output.Bytes())
-	if writeErr != nil {
-		return result, writeErr
+	if logErr := output.Error(); logErr != nil {
+		return result, logErr
 	}
 	if syncErr := log.Sync(); syncErr != nil {
 		return result, syncErr
 	}
-	result.LogHash = hash(output.Bytes())
+	logged, readErr := os.ReadFile(result.Log)
+	if readErr != nil {
+		return result, readErr
+	}
+	result.LogHash = hash(logged)
 	if err != nil {
 		return result, fmt.Errorf("regression command failed; inspect %s", result.Log)
 	}
@@ -371,6 +422,9 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 		return result, ErrStaleWork
 	}
 	p = *w.Fork
+	if p.Validation == nil || p.Validation.ID != result.Attempt || p.Validation.State != "running" {
+		return result, ErrStaleWork
+	}
 	p.ValidatedHead, p.ValidatedBase, p.ValidatedTree, p.ValidatedGuide, p.TestLog, p.TestLogHash = result.Head, result.Base, result.Tree, in.GuideVersion, result.Log, result.LogHash
 	p.ValidatedMapping, p.ValidatedPRSection = mappingHash, prSection
 	if p.SyncMode == adaptedBatches {
@@ -379,6 +433,9 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (WorkspaceTes
 			return result, err
 		}
 	}
+	// Keep the lease alive during remote checks, then stop and join before
+	// the terminal write so no heartbeat can race the completed attempt.
+	stopHeartbeat()
 	if err = s.Store.SaveForkTestProof(ctx, w.Event.Key, p.Revision, p, w.CurrentVersion); err != nil {
 		return result, err
 	}

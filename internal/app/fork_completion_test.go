@@ -68,7 +68,7 @@ func TestForkCompletionExplicitlyCoversOlderEvents(t *testing.T) {
 		}
 	}
 	got, err := s.FinishWork(t.Context(), latest, update)
-	if err != nil || got.Status != "in_review" || owner.status != "in_review" {
+	if err != nil || got.Status != "in_progress" || owner.status != "in_progress" {
 		t.Fatal("review-ready fork did not finish", got, err)
 	}
 	after, err := s.Store.ForkProgress(t.Context(), s.Config.Forks[0].Key())
@@ -79,7 +79,7 @@ func TestForkCompletionExplicitlyCoversOlderEvents(t *testing.T) {
 		t.Fatal("old waiting or current result was lost", len(rows), err)
 	}
 	s.Store, s.Raft.Store = openTestStore(t), openTestStore(t)
-	if _, err := s.FinishWork(t.Context(), latest, update); err != nil || len(calls) != 1 {
+	if _, err := s.FinishWork(t.Context(), latest, update); err != nil || len(calls) != 0 {
 		t.Fatal("restart repeated or lost completion", err, calls)
 	}
 }
@@ -232,7 +232,7 @@ func TestForkCoverageSurvivesHistoryCompaction(t *testing.T) {
 		t.Fatal("retry after compaction failed", err)
 	}
 	var calls []string
-	if got, err := s.FinishWork(t.Context(), latest, updateFixtureTask(t, owner, &calls)); err != nil || got.Status != "in_review" {
+	if got, err := s.FinishWork(t.Context(), latest, updateFixtureTask(t, owner, &calls)); err != nil || got.Status != "in_progress" {
 		t.Fatal("compaction lost completion evidence", got, err)
 	}
 }
