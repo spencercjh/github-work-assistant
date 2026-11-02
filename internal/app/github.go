@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -36,7 +37,13 @@ func (g GH) api(ctx context.Context, path string, pages bool) (json.RawMessage, 
 	if pages {
 		args = append(args, "--paginate", "--slurp")
 	}
+	return githubReadCommand(ctx, args, nil)
+}
+
+// Only fixed, read-only REST/GraphQL builders may call this subprocess helper.
+func githubReadCommand(ctx context.Context, args []string, input io.Reader) (json.RawMessage, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Stdin = input
 	var out limitedBuffer
 	cmd.Stdout = &out
 	var stderr limitedBuffer

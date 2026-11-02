@@ -27,7 +27,8 @@
       "guide_file": "guides/engine.md",
       "task_target": "#github-work",
       "test_commands": [["make", "test"], ["make", "test-custom"]],
-      "github_actions": ["push", "open-pr"]
+      "github_actions": ["push", "open-pr"],
+      "resolve_review_threads": false
     }
   ]
 }
@@ -44,6 +45,7 @@
 | `guide_file` | 由部署者维护，位于配置目录内；不能来自正在整合的 PR。说明定制能力的目的、测试方法和允许的操作。 |
 | `test_commands` | 必填。覆盖上游行为和自有行为；只有编译成功不足以证明定制能力仍然成立。 |
 | `github_actions` | 默认没有远端写权限。示例允许推送同步分支和创建 PR，由人合入。需要自动合入时，再明确加入 `merge` 并写清合入条件。 |
+| `resolve_review_threads` | 默认 `false`。启用后，执行者可在修复已推送并通过当前指引的测试后，逐条解决当前同步 PR 的评审讨论；普通 PR 不适用。操作前必须检查具体讨论，见[修复后解决评审讨论](REPOSITORY-WORK.md#修复后解决评审讨论)。 |
 
 仓库指引仍按仓库生效，应写明授权只适用于哪些维护工作，不能把它理解为该仓库所有 PR 均获准操作。Project-HAMi 社区目标仍仅允许调查，因此不能配置为可修改的维护目标。
 

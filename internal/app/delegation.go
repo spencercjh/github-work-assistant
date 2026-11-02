@@ -10,14 +10,15 @@ import (
 
 type GitHubActionInput struct {
 	WorkInput
-	RunID      int64  `json:"run_id,omitempty"`
-	RunAttempt int    `json:"run_attempt,omitempty"`
-	JobID      int64  `json:"job_id,omitempty"`
-	Action     string `json:"action"`
-	Ref        string `json:"ref,omitempty"`
-	Head       string `json:"head"`
-	Base       string `json:"base"`
-	Body       string `json:"body,omitempty"`
+	ReviewThreadID string `json:"review_thread_id,omitempty"`
+	RunID          int64  `json:"run_id,omitempty"`
+	RunAttempt     int    `json:"run_attempt,omitempty"`
+	JobID          int64  `json:"job_id,omitempty"`
+	Action         string `json:"action"`
+	Ref            string `json:"ref,omitempty"`
+	Head           string `json:"head"`
+	Base           string `json:"base"`
+	Body           string `json:"body,omitempty"`
 }
 
 const maxPRBodyBytes = 128 << 10
@@ -79,6 +80,12 @@ func (s *Service) CheckGitHubAction(ctx context.Context, in GitHubActionInput) (
 	}
 	if in.Action == "rerun-ci" {
 		return s.checkForkCIRetry(ctx, w, in)
+	}
+	if in.Action == "resolve-review-thread" {
+		if !w.Guide.ResolveReviewThreads || w.Fork == nil {
+			return result, ErrWorkDenied
+		}
+		return s.checkForkAction(ctx, w, in)
 	}
 	if !slices.Contains(w.Guide.GitHubActions, in.Action) {
 		return result, ErrWorkDenied
