@@ -222,7 +222,7 @@ func (s *Store) saveForkProgress(ctx context.Context, key string, revision int64
 		if err = saveReport(ctx, tx, result.EventID, result.ReportID, canonical(result)); err != nil {
 			return err
 		}
-		if next.Validation != nil && next.Validation.State != "running" {
+		if next.Validation != nil && next.Validation.State != "running" && next.Validation.HandledAt == 0 {
 			v := *next.Validation
 			v.HandledAt = time.Now().Unix()
 			next.Validation = &v

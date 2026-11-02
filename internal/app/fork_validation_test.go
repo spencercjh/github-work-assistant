@@ -256,6 +256,20 @@ func TestForkValidationProofAndFailureHaveDistinctDurableResults(t *testing.T) {
 			if p.Validation.HandledAt == 0 {
 				t.Fatal("reported run still awaiting recovery")
 			}
+			// Rechecking a completed batch must preserve when this run was
+			// first handled, regardless of a wall-clock second boundary.
+			p.Validation.HandledAt = time.Now().Add(-time.Hour).Unix()
+			firstHandled := p.Validation.HandledAt
+			if err = s.Store.SaveForkProgress(t.Context(), w.Event.Key, p.Revision, p, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.RecordWorkResult(t.Context(), WorkResult{WorkInput: in, ReportID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Outcome: "waiting", Summary: "Rechecked the same validation result."}); err != nil {
+				t.Fatal(err)
+			}
+			p, err = s.Store.ForkProgress(t.Context(), w.Event.Key)
+			if err != nil || p.Validation.HandledAt != firstHandled {
+				t.Fatal("later report changed the first handled timestamp", p.Validation, err)
+			}
 		})
 	}
 }
