@@ -34,6 +34,13 @@ func (s *Service) Doctor(ctx context.Context) ([]Diagnostic, error) {
 		err = errors.New("database schema is unavailable; run migrate first")
 	}
 	add("schema", "database schema is initialized", err)
+	if s.Config.GitHubSource == "webhook" {
+		var err error
+		if len(s.WebhookSecret) < 32 {
+			err = errors.New("GitHub webhook secret is missing or shorter than 32 bytes")
+		}
+		add("github_webhook", "secret loaded; HTTPS reachability and GitHub subscriptions require a test delivery", err)
+	}
 	if s.Config.RaftMode == "external" {
 		_, err = s.Raft.ExternalIdentity(ctx)
 		add("raft_identity", "external identity, server and read/send capabilities match", err)

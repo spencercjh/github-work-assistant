@@ -57,6 +57,14 @@ func (s *Store) Status(ctx context.Context) (map[string]any, error) {
 		return nil, e
 	}
 	out["forks"], out["fork_errors"] = forks, forkErrors
+	var pendingHooks, retryingHooks int64
+	if e = s.db.Session(ctx).Model(&webhookRecord{}).Where("finished_at = 0").Count(&pendingHooks).Error; e != nil {
+		return nil, e
+	}
+	if e = s.db.Session(ctx).Model(&webhookRecord{}).Where("finished_at = 0 AND attempts > 0").Count(&retryingHooks).Error; e != nil {
+		return nil, e
+	}
+	out["webhooks"] = map[string]int64{"pending": pendingHooks, "retrying": retryingHooks}
 
 	for name, q := range map[string]string{"compacted_events": `SELECT COUNT(*) FROM ghraft_events WHERE compacted_at>0`, "pending_delivery": `SELECT COUNT(*) FROM ghraft_events WHERE state='pending'`, "unprocessed": `SELECT COUNT(*) FROM ghraft_events e WHERE NOT EXISTS(SELECT 1 FROM ghraft_triage t WHERE t.event_id=e.event_id) AND NOT EXISTS(SELECT 1 FROM ghraft_results r WHERE r.event_id=e.event_id)`, "legacy_history": `SELECT COUNT(*) FROM ghraft_legacy_history`, "processed": `SELECT COUNT(*) FROM ghraft_triage`} {
 		var n int

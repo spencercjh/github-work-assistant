@@ -40,6 +40,7 @@ type Config struct {
 	ServerSlug                      string                `json:"server_slug"`
 	AgentID                         string                `json:"agent_id"`
 	GitHubLogin                     string                `json:"github_login"`
+	GitHubSource                    string                `json:"github_source,omitempty"`
 	Watches                         []Watch               `json:"watches"`
 	PollSeconds                     int                   `json:"poll_seconds"`
 	Discover                        bool                  `json:"discover_notifications"`
@@ -102,6 +103,15 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if c.PollSeconds == 0 {
 		c.PollSeconds = 120
+	}
+	if c.GitHubSource == "" {
+		c.GitHubSource = "polling"
+	}
+	if c.GitHubSource != "polling" && c.GitHubSource != "webhook" {
+		return c, errors.New("github_source must be polling or webhook")
+	}
+	if c.GitHubSource == "webhook" && c.Discover {
+		return c, errors.New("webhook mode requires discover_notifications=false and explicit watches or forks")
 	}
 	if c.HistoryRetentionDays == 0 {
 		c.HistoryRetentionDays = 30
