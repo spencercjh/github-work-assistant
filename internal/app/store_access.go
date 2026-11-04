@@ -8,7 +8,7 @@ import (
 func (s *Store) Close() error                   { return s.db.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 func (s *Store) SchemaReady(ctx context.Context) error {
-	for _, table := range []string{"ghraft_locks", "ghraft_watch_access", "ghraft_work_links", "ghraft_watches", "ghraft_meta", "ghraft_legacy_history", "ghraft_triage", "ghraft_snapshots", "ghraft_events", "ghraft_private", "ghraft_results", "ghraft_webhooks"} {
+	for _, table := range []string{"ghraft_locks", "ghraft_watch_access", "ghraft_work_links", "ghraft_watches", "ghraft_meta", "ghraft_legacy_history", "ghraft_triage", "ghraft_snapshots", "ghraft_events", "ghraft_private", "ghraft_results"} {
 		if !s.db.Session(ctx).Migrator().HasTable(table) {
 			return errors.New("database schema is incomplete; run migrate")
 		}

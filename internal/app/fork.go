@@ -282,10 +282,6 @@ func planFork(spec ForkSpec, p ForkProgress, o ForkObservation, now int64) ForkP
 	if pull := o.Objects["pull"]; pull != nil && pull["state"] == "closed" && pull["merged"] != true {
 		p.Phase, p.NextAttempt = "needs-decision", 0
 	}
-	return advanceForkTimers(p, now)
-}
-
-func advanceForkTimers(p ForkProgress, now int64) ForkProgress {
 	if recoverForkValidation(&p, now) {
 		return p
 	}

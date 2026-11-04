@@ -14,10 +14,6 @@ var ErrNotFound = database.ErrNotFound
 // envelopes, and stale evidence rejection. It deliberately exposes no SQL connection or transaction.
 // A non-SQL implementation can satisfy this interface without changing services.
 type Persistence interface {
-	AcceptWebhook(context.Context, WebhookDelivery) (bool, error)
-	PendingWebhooks(context.Context, int64) ([]WebhookDelivery, error)
-	FinishWebhook(context.Context, WebhookDelivery, []string, string, int64) error
-	TickFork(context.Context, ForkSpec, int64) (bool, error)
 	ForkProgress(context.Context, string) (ForkProgress, error)
 	ObserveFork(context.Context, ForkSpec, ForkProgress, ForkObservation) error
 	StartForkBatch(context.Context, ForkSpec, ForkProgress, ForkProgress, ForkObservation, string) error

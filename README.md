@@ -34,7 +34,7 @@ make setup
 state/assistant/run serve
 ```
 
-默认轮询模式无需注册 Raft App，也无需域名或公网入站端口。完整的凭据取得、后台启动、验证和故障恢复步骤见 **[快速部署](docs/QUICKSTART.md)**；需要事件驱动接入时，见 [GitHub Webhook](docs/WEBHOOKS.md)。
+新安装无需注册 Raft App，也无需域名或公网入站端口。完整的凭据取得、后台启动、验证和故障恢复步骤见 **[快速部署](docs/QUICKSTART.md)**。
 
 ## 能做什么
 
@@ -53,7 +53,6 @@ state/assistant/run serve
 | 需要做什么 | 入口 |
 | --- | --- |
 | 安装、配置、常驻运行、备份和恢复 | [快速部署](docs/QUICKSTART.md) |
-| 轮询／Webhook 二选一、签名和投递恢复 | [GitHub Webhook](docs/WEBHOOKS.md) |
 | 选择数据库、配置云数据库连接、扩展持久化实现 | [存储配置与实现](docs/STORAGE.md) |
 | 让执行 Agent 处理通知和保存结果 | [Agent 工作说明](docs/AGENT-WORKFLOW.md) |
 | 配置 fork 维护、验证定制能力与恢复中断 | [持续维护 fork](docs/FORK-MAINTENANCE.md) |
@@ -71,7 +70,7 @@ python3 scripts/smoke-setup.py
 python3 scripts/smoke-setup.py --database mysql
 ```
 
-当前支持单用户、多执行 Agent、单机部署。默认每 120 秒查询 GitHub，也可将 `github_source` 设为 `webhook`，仅按收到的事件刷新；两种来源不能同时启用。尚未实现多租户服务或跨主机执行。快照无法保证还原两次读取之间出现后又被删除的内容；幂等写也不能替代执行 Agent 的重复事件检查。
+当前支持单用户、多执行 Agent、单机部署。默认每 120 秒查询 GitHub，尚未实现 Webhook、多租户服务或跨主机执行。轮询快照无法保证还原采集间隔内出现后又被删除的内容；幂等写也不能替代执行 Agent 的重复事件检查。
 
 External Agent 接口按官方 SDK 0.30.0 的契约实现。协议模拟测试不等于真实账号完成登录、收信和处理；部署者应完成快速部署中的实际接收验证。
 

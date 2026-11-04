@@ -37,7 +37,6 @@ type Options struct {
 	Token                     []byte
 	Identity                  app.ExternalIdentity
 	GitHubLogin               string
-	GitHubSource              string
 	Recipient                 string
 	TaskChannel               string
 	Notify                    string
@@ -64,7 +63,6 @@ func Init(args []string, out io.Writer) error {
 	sqlitePath := f.String("sqlite-path", "", "Local SQLite file; defaults to the private instance directory")
 	port := f.Int("db-port", 13306, "Unused loopback port for a managed MySQL container")
 	watches := f.String("watch", "", "Optional comma-separated owner/repo#number watches")
-	source := f.String("github-source", "polling", "GitHub event source: polling or webhook (requires explicit --watch)")
 	privateRepos := f.String("private-repositories", "", "Private repository scope: comma-separated owner/repo, owner/* or *; empty disables private access")
 	privateSince := f.String("private-notifications-since", "", "Earliest private notification and first-observation comment time (RFC3339); defaults to now when enabling private repositories")
 	if err := f.Parse(args); err != nil {
@@ -72,12 +70,6 @@ func Init(args []string, out io.Writer) error {
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected init arguments")
-	}
-	if *source != "polling" && *source != "webhook" {
-		return errors.New("--github-source must be polling or webhook")
-	}
-	if *source == "webhook" && *watches == "" {
-		return errors.New("webhook installation requires --watch; fork rules can be added in config.json")
 	}
 	if *tokenFile == "" || ((*recipient == "") == (*taskChannel == "")) {
 		return errors.New("init requires --raft-token-file and exactly one of --task-channel or --recipient; see docs/QUICKSTART.md")
@@ -165,7 +157,6 @@ func Init(args []string, out io.Writer) error {
 		}
 	}
 	o := Options{Database: *backend, DSN: dsn, SQLitePath: *sqlitePath, Dir: *dir, Executable: executable, Token: token, Identity: identity, GitHubLogin: login, Recipient: *recipient, TaskChannel: *taskChannel, Notify: *notify, DecisionMaker: *decisionMaker, RaftAPI: r.Config.RaftAPI, Port: *port, Watches: parsed, PrivateRepositories: privateScope, PrivateNotificationsSince: *privateSince}
-	o.GitHubSource = *source
 	if err := Write(o); err != nil {
 		return err
 	}
@@ -175,9 +166,6 @@ func Init(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "Next: docker compose -f %s/database.yml up -d --wait\n", shellQuote(abs))
 	}
 	fmt.Fprintf(out, "Then: %s/run migrate\nThen: %s/run doctor\nGive %s/EXECUTOR.md to the execution agent, then run: %s/run serve\n", shellQuote(abs), shellQuote(abs), abs, shellQuote(abs))
-	if *source == "webhook" {
-		fmt.Fprintln(out, "Configure HTTPS and repository webhooks before relying on updates; see docs/WEBHOOKS.md. The signing secret is stored only in private/github-webhook-secret.")
-	}
 	return nil
 }
 
@@ -272,13 +260,6 @@ func Write(o Options) error {
 		notify = "dm:@" + strings.TrimSuffix(strings.TrimPrefix(o.Notify, "@"), "~human") + "~human"
 	}
 	c := app.Config{DatabaseDriver: o.Database, RaftMode: "external", ExternalAgent: o.Identity.Agent.ID, ServerID: o.Identity.Server.ID, ServerSlug: o.Identity.Server.Slug, RaftAPI: o.RaftAPI, GitHubLogin: o.GitHubLogin, DeliveryTarget: "dm:@" + recipient + "~agent", PollSeconds: 120, Discover: true, Watches: o.Watches, NotifyTarget: notify, LookbackHours: 6, HistoryRetentionDays: 30, WorkspaceRoot: filepath.Join(root, "worktrees")}
-	c.GitHubSource = o.GitHubSource
-	if c.GitHubSource == "" {
-		c.GitHubSource = "polling"
-	}
-	if c.GitHubSource == "webhook" {
-		c.Discover = false
-	}
 	c.DecisionMaker = o.DecisionMaker
 	if o.TaskChannel != "" {
 		c.DeliveryTarget = o.TaskChannel
@@ -313,7 +294,7 @@ services:
 volumes:
   database:
 `, name, databaseImage, o.Port)
-	run := "#!/usr/bin/env bash\nset -euo pipefail\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n# Bind this wrapper to its own instance even inside another service shell.\nunset GHRAFT_DSN_FILE GHRAFT_KEY_FILE GHRAFT_CLIENT_SECRET_FILE GHRAFT_RAFT_TOKEN_FILE GHRAFT_LOCK_FILE GHRAFT_GITHUB_WEBHOOK_SECRET_FILE\nexec " + shellQuote(o.Executable) + " -config \"$here/config.json\" \"$@\"\n"
+	run := "#!/usr/bin/env bash\nset -euo pipefail\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n# Bind this wrapper to its own instance even inside another service shell.\nunset GHRAFT_DSN_FILE GHRAFT_KEY_FILE GHRAFT_CLIENT_SECRET_FILE GHRAFT_RAFT_TOKEN_FILE GHRAFT_LOCK_FILE\nexec " + shellQuote(o.Executable) + " -config \"$here/config.json\" \"$@\"\n"
 	unit := fmt.Sprintf(`[Unit]
 Description=Personal GitHub assistant
 After=network-online.target
@@ -337,13 +318,6 @@ WantedBy=default.target
 		"private/raft-token": append(append([]byte{}, o.Token...), '\n'),
 		"run":                []byte(run), name + ".service": []byte(unit),
 		"EXECUTOR.md": []byte(executorGuide(root, notify, o.TaskChannel, o.DecisionMaker)),
-	}
-	if c.GitHubSource == "webhook" {
-		secret, err := randomHex(32)
-		if err != nil {
-			return err
-		}
-		files["private/github-webhook-secret"] = []byte(secret + "\n")
 	}
 	if kind == "sqlite" {
 		path := o.SQLitePath
