@@ -10,7 +10,7 @@
 - 安装 [Go 1.27.3 或更新版本](https://go.dev/doc/install)和 [GitHub CLI](https://cli.github.com/)。默认使用本地 SQLite，无需数据库服务或 C 编译器。只有选择新建 MySQL 容器时，才需要 [Docker Engine](https://docs.docker.com/engine/install/) 和 [Compose 插件](https://docs.docker.com/compose/install/linux/)，并检查服务账号能运行 `docker info` 和 `docker compose version`。
 - 以服务账号运行 `gh auth login --hostname github.com`。Notifications 读取需要对应权限；使用个人访问令牌时须支持 Notifications API，并有目标资源读取权限。程序不提取或复制 `gh` 的凭据。
 
-本指南默认使用轮询，无需新增模型 API key、Raft App 注册、回调地址或公网入站端口。也可选择需要 HTTPS 接收地址的 [Webhook 模式](WEBHOOKS.md)。External Agent 在这里是发送通知的程序身份，不运行模型，也不处理发给它的聊天。请继续与执行 Agent 对话。
+无需新增模型 API key、Raft App 注册、回调地址或公网入站端口。External Agent 在这里是发送通知的程序身份，不运行模型，也不处理发给它的聊天。请继续与执行 Agent 对话。
 
 ## 安装
 
@@ -94,9 +94,7 @@ state/my-assistant/run doctor
 "watches": [{"repo": "your-name/your-repo", "number": 123}]
 ```
 
-事件来源由 `github_source` 控制：省略或填写 `polling` 使用轮询，填写 `webhook` 使用 [Webhook 接入](WEBHOOKS.md)，不同时启用两者。Webhook 模式要求 `discover_notifications=false`，只刷新显式配置的关注对象和 fork。
-
-以下规则适用于轮询模式。自动发现由 `discover_notifications` 控制；关闭时必须保留至少一个固定关注对象或 fork 维护规则。默认 `poll_seconds=120`，最小 60 秒。普通 Issue／PR 的后台轮询按状态处理：
+自动发现由 `discover_notifications` 控制；关闭时必须保留至少一个固定关注对象或 fork 维护规则。默认 `poll_seconds=120`，最小 60 秒。普通 Issue／PR 的后台轮询按状态处理：
 
 | 状态或触发条件 | 查询行为 |
 | --- | --- |
@@ -160,7 +158,7 @@ journalctl --user -u "$unit" -n 50 --no-pager
 
 生成的服务保存初始化时的可执行文件路径和 `PATH`。移动仓库或工具后应更新服务与 `run` 中的路径。`enable` 保证用户服务管理器启动后拉起服务；若要求退出登录后或开机无登录运行，需由机器管理员启用该账号的 linger；选择 MySQL 容器时，还应确认 Docker 随机器启动。
 
-每套数据库只能有一个采集实例。本机锁防止重复启动同一实例，但不能防止另一台机器连接同一数据库。External 模式使用轮询时不监听 HTTP；使用 Webhook 时监听 `listen` 地址，提供接收接口和数据库健康检查。通过 `doctor`、`status` 和服务日志检查运行情况。
+每套数据库只能有一个采集实例。本机锁防止重复启动同一实例，但不能防止另一台机器连接同一数据库。External 模式不监听 HTTP；通过 `doctor`、`status` 和服务日志检查运行情况。
 
 ## 备份、升级与恢复
 

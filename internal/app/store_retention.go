@@ -89,15 +89,14 @@ func saveReport(ctx context.Context, tx *database.Tx, id, report string, body []
 }
 
 type CleanupStats struct {
-	DryRun            bool  `json:"dry_run"`
-	RetentionDays     int   `json:"history_retention_days"`
-	Events            int64 `json:"event_bodies"`
-	Reports           int64 `json:"report_bodies"`
-	Triages           int64 `json:"triage_bodies"`
-	LegacyEntries     int64 `json:"legacy_bodies"`
-	DeliveryRequests  int64 `json:"delivery_requests"`
-	ExpiredSecrets    int64 `json:"expired_secrets"`
-	WebhookDeliveries int64 `json:"webhook_deliveries"`
+	DryRun           bool  `json:"dry_run"`
+	RetentionDays    int   `json:"history_retention_days"`
+	Events           int64 `json:"event_bodies"`
+	Reports          int64 `json:"report_bodies"`
+	Triages          int64 `json:"triage_bodies"`
+	LegacyEntries    int64 `json:"legacy_bodies"`
+	DeliveryRequests int64 `json:"delivery_requests"`
+	ExpiredSecrets   int64 `json:"expired_secrets"`
 }
 
 // Cleanup removes optional bodies, never event identities, processing markers,
@@ -119,7 +118,6 @@ func (s *Store) Cleanup(ctx context.Context, days int, dryRun bool) (CleanupStat
 		count *int64
 	}{
 		{&secretRecord{}, "expires_at <= ?", []any{now}, &stats.ExpiredSecrets},
-		{&webhookRecord{}, "finished_at > 0 AND finished_at < ?", []any{cutoff}, &stats.WebhookDeliveries},
 		{&metaRecord{}, "name LIKE ? AND SUBSTR(name, 19) IN (SELECT event_id FROM ghraft_events WHERE state = ?)", []any{"external-delivery:%", "accepted"}, &stats.DeliveryRequests},
 	} {
 		q := s.db.Session(ctx).Model(item.model).Where(item.where, item.args...)
