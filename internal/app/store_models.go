@@ -102,3 +102,19 @@ type resultRecord struct {
 }
 
 func (resultRecord) TableName() string { return "ghraft_results" }
+
+// Only routing keys and a fingerprint are retained, never webhook bodies,
+// comments, URLs, sender details or the signing secret.
+type webhookRecord struct {
+	DeliveryID  string `gorm:"size:64;primaryKey"`
+	BodyHash    string `gorm:"size:64;not null"`
+	EventType   string `gorm:"size:64;not null"`
+	PendingKeys string `gorm:"type:text;not null"`
+	Attempts    int    `gorm:"not null;default:0"`
+	NextAttempt int64  `gorm:"not null;default:0;index"`
+	ReceivedAt  int64  `gorm:"not null"`
+	FinishedAt  int64  `gorm:"not null;default:0;index"`
+	LastError   string `gorm:"type:text;not null"`
+}
+
+func (webhookRecord) TableName() string { return "ghraft_webhooks" }

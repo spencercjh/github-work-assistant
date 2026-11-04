@@ -110,6 +110,16 @@ func run() error {
 		raft.Credential = string(b)
 	}
 	svc := &app.Service{Config: c, Store: store, Raft: raft, GH: app.GH{Login: c.GitHubLogin, PrivateRepositories: c.PrivateRepositories, PrivateNotificationsSince: c.PrivateNotificationsSince, NotificationExcludeRepositories: c.NotificationExcludeRepositories, ForkMergeAcceptances: c.ForkMergeAcceptances}}
+	if c.GitHubSource == "webhook" && (command == "serve" || command == "doctor") {
+		secret, err := readSecret("GHRAFT_GITHUB_WEBHOOK_SECRET_FILE", c.PrivateFile("github-webhook-secret"))
+		if err != nil {
+			return fmt.Errorf("GitHub webhook secret: %w", err)
+		}
+		if len(secret) < 32 {
+			return errors.New("GitHub webhook secret must contain at least 32 bytes")
+		}
+		svc.WebhookSecret = secret
+	}
 	switch command {
 	case "cleanup":
 		f := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -215,9 +225,16 @@ func run() error {
 			if _, err := raft.ExternalIdentity(dbctx); err != nil {
 				return err
 			}
-			log.Printf("GitHub assistant %s started (external delivery, outbound connections only)", version)
-			svc.Loop(ctx)
-			return nil
+			if c.GitHubSource != "webhook" {
+				log.Printf("GitHub assistant %s started (polling, external delivery, outbound connections only)", version)
+				svc.Loop(ctx)
+				return nil
+			}
+		}
+		if c.GitHubSource == "webhook" {
+			if err := store.SchemaReady(ctx); err != nil {
+				return err
+			}
 		}
 		server := &http.Server{Addr: c.Listen, Handler: svc.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 		go svc.Loop(ctx)
@@ -227,7 +244,7 @@ func run() error {
 			defer done()
 			server.Shutdown(c)
 		}()
-		log.Printf("GitHub Raft App listening on %s (GitHub read-only, authorized watches)", c.Listen)
+		log.Printf("GitHub assistant listening on %s (source=%s; GitHub read-only, authorized watches)", c.Listen, c.GitHubSource)
 		e = server.ListenAndServe()
 		if errors.Is(e, http.ErrServerClosed) {
 			return nil

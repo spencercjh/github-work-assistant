@@ -18,11 +18,14 @@ import (
 )
 
 type Service struct {
-	Config Config
-	Store  Persistence
-	Raft   *Raft
-	GH     GitHub
-	mu     sync.Mutex
+	Config        Config
+	Store         Persistence
+	Raft          *Raft
+	GH            GitHub
+	mu            sync.Mutex
+	WebhookSecret []byte
+	webhookOnce   sync.Once
+	webhookWake   chan struct{}
 }
 
 func (s *Service) Collect(ctx context.Context) error {
@@ -158,23 +161,29 @@ func (s *Service) Deliver(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 func (s *Service) Loop(ctx context.Context) {
-	t := time.NewTicker(time.Duration(s.Config.PollSeconds) * time.Second)
+	interval := time.Duration(s.Config.PollSeconds) * time.Second
+	var wake <-chan struct{}
+	if s.Config.GitHubSource == "webhook" {
+		interval, wake = 2*time.Second, s.webhookSignal()
+	}
+	t := time.NewTicker(interval)
 	defer t.Stop()
-	var nextCleanup time.Time
+	var nextCleanup, nextDelivery time.Time
 	for {
 		c, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		collectErr := s.Collect(c)
-		if collectErr != nil {
+		activity, collectErr := s.collectScheduled(c)
+		if collectErr != nil && (activity || !errors.Is(collectErr, ErrGitHubRateLimited)) {
 			log.Printf("collector: %s", collectErr)
 		}
 		cancel()
 		c, cancel = context.WithTimeout(ctx, 2*time.Minute)
 		// Delivery also performs GitHub authorization reads. Preserve the queue
 		// and wait for the next cycle instead of continuing after a quota failure.
-		if !errors.Is(collectErr, ErrGitHubRateLimited) {
+		if !errors.Is(collectErr, ErrGitHubRateLimited) && (activity || time.Now().After(nextDelivery)) {
 			if e := s.Deliver(c); e != nil {
 				log.Printf("delivery: %s", e)
 			}
+			nextDelivery = time.Now().Add(time.Duration(s.Config.PollSeconds) * time.Second)
 		}
 		cancel()
 		if time.Now().After(nextCleanup) {
@@ -191,6 +200,7 @@ func (s *Service) Loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-wake:
 		}
 	}
 }
@@ -239,6 +249,9 @@ func (s *Service) auth(r *http.Request) (Identity, error) {
 }
 func (s *Service) Handler() http.Handler {
 	m := http.NewServeMux()
+	if s.Config.GitHubSource == "webhook" {
+		m.HandleFunc("POST /webhooks/github", s.receiveWebhook)
+	}
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if e := s.Store.Ping(r.Context()); e != nil {
 			fail(w, 503, "DATABASE_UNAVAILABLE")
@@ -246,6 +259,11 @@ func (s *Service) Handler() http.Handler {
 		}
 		ok(w, map[string]string{"status": "ready", "scope": "database only; check event receipts for delivery"})
 	})
+	// External delivery only starts an HTTP listener in webhook mode. Keep
+	// that listener limited to intake and health, without OAuth/action routes.
+	if s.Config.RaftMode == "external" && s.Config.GitHubSource == "webhook" {
+		return m
+	}
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		io.WriteString(w, "GitHub Work Assistant for Raft\nAuthenticated events, repository guidance, task links and reports.\nGitHub queries are read-only. Tasks execute in Raft.\n")

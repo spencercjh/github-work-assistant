@@ -41,7 +41,7 @@ func OpenStoreBackend(ctx context.Context, driver, dsn string, key []byte, creat
 	return &Store{db: db, Box: box, LookbackHours: 6}, nil
 }
 func (s *Store) Migrate(ctx context.Context) error {
-	if err := s.db.Migrate(ctx, &accessRecord{}, &workLinkRecord{}, &watchRecord{}, &metaRecord{}, &legacyRecord{}, &triageRecord{}, &snapshotRecord{}, &eventRecord{}, &secretRecord{}, &resultRecord{}); err != nil {
+	if err := s.db.Migrate(ctx, &accessRecord{}, &workLinkRecord{}, &watchRecord{}, &metaRecord{}, &legacyRecord{}, &triageRecord{}, &snapshotRecord{}, &eventRecord{}, &secretRecord{}, &resultRecord{}, &webhookRecord{}); err != nil {
 		return err
 	}
 	// Old records have no acceptance/import time. Start their retention window
@@ -104,6 +104,12 @@ func (s *Store) Observe(ctx context.Context, key string, body []byte) (string, e
 }
 
 func (s *Store) observeTx(ctx context.Context, tx *database.Tx, key string, body []byte) (string, error) {
+	return s.observeTxAt(ctx, tx, key, body, time.Now().Unix())
+}
+
+// Local maintenance deadlines may emit an event, but must not make cached
+// GitHub evidence appear freshly collected.
+func (s *Store) observeTxAt(ctx context.Context, tx *database.Tx, key string, body []byte, observedAt int64) (string, error) {
 	v := hash(body)
 	var e error
 	var current Snapshot
@@ -144,7 +150,7 @@ func (s *Store) observeTx(ctx context.Context, tx *database.Tx, key string, body
 		}
 	}
 	if previous == v || (previous != "" && hash(comparisonBody) == v) {
-		if e = tx.Session(ctx).Model(&snapshotRecord{}).Where("resource_key = ?", key).UpdateColumn("observed_at", time.Now().Unix()).Error; e != nil {
+		if e = tx.Session(ctx).Model(&snapshotRecord{}).Where("resource_key = ?", key).UpdateColumn("observed_at", observedAt).Error; e != nil {
 			return "", e
 		}
 		return "", nil
@@ -160,7 +166,7 @@ func (s *Store) observeTx(ctx context.Context, tx *database.Tx, key string, body
 	}
 	delta, structured := changes(comparisonBody, body, time.Now(), s.LookbackHours, since)
 	payload, _ := json.Marshal(map[string]any{"event_id": id, "resource_key": key, "version": v, "previous_version": previous, "first_observation": previous == "", "data_classification": classification, "subject": subjectOf(current), "github_ended": githubEnded(body), "changes": delta})
-	e = tx.Upsert(ctx, &snapshotRecord{key, v, string(body), time.Now().Unix()}, []string{"resource_key"}, []string{"version_hash", "body", "observed_at"})
+	e = tx.Upsert(ctx, &snapshotRecord{key, v, string(body), observedAt}, []string{"resource_key"}, []string{"version_hash", "body", "observed_at"})
 	if e != nil {
 		return "", e
 	}

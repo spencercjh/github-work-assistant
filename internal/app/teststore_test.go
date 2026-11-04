@@ -72,7 +72,7 @@ func freshTestStore(t *testing.T) *Store {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"ghraft_watch_access", "ghraft_work_links", "ghraft_triage", "ghraft_legacy_history", "ghraft_meta", "ghraft_watches", "ghraft_results", "ghraft_events", "ghraft_snapshots", "ghraft_private"} {
+	for _, table := range []string{"ghraft_webhooks", "ghraft_watch_access", "ghraft_work_links", "ghraft_triage", "ghraft_legacy_history", "ghraft_meta", "ghraft_watches", "ghraft_results", "ghraft_events", "ghraft_snapshots", "ghraft_private"} {
 		if _, err := s.db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatal(err)
 		}
