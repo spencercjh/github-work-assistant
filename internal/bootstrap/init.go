@@ -453,9 +453,11 @@ work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha�
 
 test-worktree 会核对来源清单、提交顺序和尾注；成功返回 pr_body_file。把生成的完整来源表放入 PR 正文，保留其中每条上游链接、移植提交、跳过理由和标记。创建或编辑适配 PR 前，check-github-action 另传 --body-file <实际完整正文>；发布后核对远端正文。清单变化必须重测，已有已完成轮次的历史证明保留。除非用户明确授权其他状态，创建草稿 PR。检查只验证来源声明和 Git 对应关系，测试和人工审阅仍需核实语义。关闭后明确重试时，restart-sync 后再 start-sync-batch，保留原起点、旧工作区及报告。
 
-每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr/edit-pr 只能使用 sync_branch，merge 使用目标分支。默认只允许正常推送；精确 sync_branch_replacement 授权通过检查并返回 expected_remote_head 时，才可用显式 --force-with-lease 替换指定旧提交。默认原样同步采用 merge commit，保留原始上游历史；adapted-batches 采用 squash，核对唯一父提交等于已测试目标、文件树等于已测试结果。只配置 push/open-pr 时，由人完成合入，仍可核验结果并记录 merged。GitHub PR 已合入后，刷新并读取 current_event_id 对应的新事件，等待投递确认，重新关联版本，再保存 merged；程序按同步模式检查实际合入提交的父提交、文件树及其在目标历史中的位置。旧事件不能代表新的核验结果。
+每次远端写入前运行 check-github-action，另加 --ref <准确分支>；push/open-pr/edit-pr 只能使用 sync_branch，merge 使用目标分支。默认只允许正常推送；精确 sync_branch_replacement 授权通过检查并返回 expected_remote_head 时，才可用显式 --force-with-lease 替换指定旧提交。默认原样同步采用 merge commit，保留原始上游历史；adapted-batches 采用 squash。只配置 push/open-pr 时，由人完成合入，执行者仍可记录 merged。
 
-若保存 merged 后已有新事件，原报告保留。先核对新事件、关联当前证据，再用新的报告 UUID 记录 merged；已同步的同一轮仍需重新查询远端并核验实际合并、测试证明、当前指引和归属，不会再次推进完成位置。之后逐条关联已核对的旧事件并 finish-work。下一批是否可选，以 fork.phase=synced 且 fork.observed_upstream_sha 不同于 fork.upstream_sha 为准；不要依赖历史快照的 next_batch_ready 标记。
+合入后读取最新已投递的合并事件，按当前版本 link-task，再记录一次 merged。record-work-result 自动刷新远端，按同步模式核对已合入的 PR、受测提交、父提交、文件树及目标历史，并保存完成位置。执行者不再另行用 Git、gh 或 Stamp 重复这些检查，不重新核验测试日志或重跑已通过的测试。仅当工具返回不一致或失败时，才按具体错误排查。版本过期时读取最新事件并重新关联，不从手工检查开始重做。
+
+已保存 merged 的同一轮继续保留原报告。后续通知若没有新请求、异常或剩余动作，阅读后以 record-triage --outcome quiet 记录具体理由，不为重复通知再次报告 merged；确有新问题时处理该问题。旧事件确由当前报告覆盖时可用 superseded，否则逐条判断，无需为了关联旧通知重做合入确认。处理完剩余事件后调用 finish-work；成功收尾只简要说明结果与下一步，不逐项汇报内部检查。fork.phase=synced 且 fork.observed_upstream_sha 不同于 fork.upstream_sha 时继续下一批；不要依赖历史快照的 next_batch_ready 标记。
 
 waiting 保存等待条件，needs-decision 保存必须由人决定的具体问题；不可用 quiet 代替维护结果。处理超时会有限次唤醒原负责人，不交给其他执行者。PR 被关闭但未合入时先解释原因；只有决定重试后才 restart-sync，新轮次不继承旧测试证据。详细配置、操作和恢复方法见仓库 docs/FORK-MAINTENANCE.md。
 
