@@ -101,7 +101,7 @@ func run() error {
 		secret = string(b)
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
-	needsClaim := c.SharedTasks() && (command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync" || command == "start-sync-batch")
+	needsClaim := c.SharedTasks() && (command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync" || command == "start-sync-batch" || command == "recover-fork-proof")
 	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || command == "adopt-discussion" || needsClaim) {
 		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
 		if err != nil {
@@ -160,7 +160,7 @@ func run() error {
 			return e
 		}
 		return err
-	case "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync", "start-sync-batch":
+	case "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync", "start-sync-batch", "recover-fork-proof":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
@@ -272,6 +272,8 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	var result any
 	var err error
 	switch command {
+	case "recover-fork-proof":
+		result, err = svc.RecoverForkProof(ctx, in)
 	case "request-work":
 		var body []byte
 		body, err = os.ReadFile(*reason)
