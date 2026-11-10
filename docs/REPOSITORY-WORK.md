@@ -137,7 +137,18 @@ bin/ghraft -config config.json check-github-action \
 
 ## 更新已有 PR 的标题和正文
 
-完成上下文刷新与关联后，使用当前 PR 的 head/base 运行 `check-github-action --action edit-pr`。fork 维护还必须传入 `--ref <本轮同步分支>`。适配模式还需当前提交、目标与指引的测试证明，并通过 `--body-file <实际完整正文>` 保留测试生成的完整上游来源表。只有检查返回 `permitted=true` 且 `editable_fields` 为 `["title", "body"]` 时，才能更新返回的 `repository` 和 `number` 对应的原 PR。检查允许草稿 PR，拒绝已关闭或已合入的 PR。
+完成上下文刷新与关联后，使用当前 PR 的 head/base 运行 `check-github-action --action edit-pr`。fork 维护的 `--base` 使用当前目标分支 SHA，并传入 `--ref <本轮同步分支>`。适配模式还需当前提交、目标与指引的测试证明，并通过 `--body-file <实际完整正文>` 保留测试生成的完整上游来源表。只有检查返回 `permitted=true` 且 `editable_fields` 为 `["title", "body"]` 时，才能更新返回的 `repository` 和 `number` 对应的原 PR。检查允许草稿 PR，拒绝已关闭或已合入的 PR。
+
+目标分支推进后，PR API 的 `base.sha` 可能仍是旧值。同步 PR 的标题／正文更新可用 `--pr-base` 显式声明本次读取的 PR base；`--base` 仍填写当前目标 SHA。两个值分别与最新快照精确核对，适配模式的测试证明仍须绑定当前目标。未传 `--pr-base` 时，PR base 必须与 `--base` 相同。
+
+```bash
+"$INSTANCE/run" check-github-action "${work[@]}" \
+  --action edit-pr --ref "$SYNC_BRANCH" --head "$HEAD_SHA" \
+  --base "$TARGET_SHA" --pr-base "$OBSERVED_PR_BASE_SHA" \
+  --body-file "$PR_BODY_FILE"
+```
+
+HTTP/App 对应字段为 `pr_base`。该字段只适用于 fork 的 `edit-pr`，不适用于普通 PR、合并、推送、CI 重试或解决评审讨论。它不会改写已有证明、放宽来源校验或调整 PR 的目标分支。PR base、目标、head 或权限变化后，重新读取并检查；不要复用旧检查结果。
 
 ```bash
 gh pr edit "$PR_NUMBER" --repo "$REPOSITORY" \

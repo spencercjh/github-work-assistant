@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -72,6 +73,142 @@ func TestPRMetadataRequiresSeparateDelegationAndOpenPR(t *testing.T) {
 				t.Fatal("metadata permission allowed merging", err)
 			}
 		})
+	}
+}
+
+func TestForkMetadataSeparatesPRBaseAndTestedTarget(t *testing.T) {
+	s, g, api, in, w, ws := beginAdaptedFixture(t)
+	s.Config.Repositories[0].GitHubActions = []string{"edit-pr", "merge"}
+	in, _ = currentForkInput(t, s)
+	oldProof, err := s.TestWorkspace(t.Context(), in)
+	if err != nil || !oldProof.Passed {
+		t.Fatal("initial proof", oldProof, err)
+	}
+	body, err := os.ReadFile(oldProof.PRBodyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.pr, g.prBranch, g.remoteHead, g.prBase = 7, w.Fork.Branch, ws.Head, g.target
+	prBody := string(body)
+	g.prBody = &prBody
+	targetTree := fixtureGit(t, g.repository, "", "rev-parse", g.target+"^{tree}")
+	g.target = syntheticCommit(t, g.repository, targetTree, g.target)
+	if err = s.Collect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	in, w = currentForkInput(t, s)
+	check := GitHubActionInput{WorkInput: in, Action: "edit-pr", Head: ws.Head, Base: g.target, PRBase: g.prBase, Ref: w.Fork.Branch, Body: string(body)}
+	if got, err := s.CheckGitHubAction(t.Context(), check); err == nil || got.Permitted {
+		t.Fatal("PR base allowed a proof for the previous target", got, err)
+	}
+	proof, err := s.TestWorkspace(t.Context(), in)
+	if err != nil || !proof.Passed || proof.Head != ws.Head || proof.Base != g.target {
+		t.Fatal("new target proof", proof, err)
+	}
+	in, w = currentForkInput(t, s)
+	check.WorkInput = in
+	before := string(canonical(w.Fork))
+	got, err := s.CheckGitHubAction(t.Context(), check)
+	if err != nil || !got.Permitted || got.Base != g.target || got.PRBase != g.prBase || !slices.Equal(got.EditableFields, []string{"title", "body"}) {
+		t.Fatal("tested metadata update rejected while PR base lags", got, err)
+	}
+	for _, scenario := range []string{"omitted PR base", "wrong PR base", "malformed PR base", "old target", "wrong head", "wrong ref", "missing provenance", "merge override", "merge without override", "resolve without override"} {
+		t.Run(scenario, func(t *testing.T) {
+			bad := check
+			switch scenario {
+			case "omitted PR base":
+				bad.PRBase = ""
+			case "wrong PR base":
+				bad.PRBase = g.target
+			case "malformed PR base":
+				bad.PRBase = "invalid"
+			case "old target":
+				bad.Base = g.prBase
+			case "wrong head":
+				bad.Head = g.target
+			case "wrong ref":
+				bad.Ref = "main"
+			case "missing provenance":
+				bad.Body = "Updated validation"
+			case "merge override":
+				bad.Action, bad.Ref = "merge", "main"
+			case "merge without override":
+				bad.Action, bad.Ref, bad.PRBase = "merge", "main", ""
+			case "resolve without override":
+				// Exercise the revision check independently of the disabled
+				// review-thread switch, before any GraphQL lookup.
+				bad.Action, bad.PRBase = "resolve-review-thread", ""
+				if got, err := s.checkForkAction(t.Context(), w, bad); err == nil || got.Permitted {
+					t.Fatal("review resolution accepted different PR/target bases", got, err)
+				}
+				return
+			}
+			if got, err := s.CheckGitHubAction(t.Context(), bad); err == nil || got.Permitted {
+				t.Fatal("metadata parameter bypassed validation", got, err)
+			}
+		})
+	}
+	after, err := s.WorkContext(t.Context(), in.EventID)
+	if err != nil || string(canonical(after.Fork)) != before {
+		t.Fatal("metadata checks changed the original proof or progress", err)
+	}
+	// A later PR refresh must invalidate the old explicit value, even after
+	// the caller refreshes its event and task association.
+	g.prBase = g.target
+	if _, err = s.CheckGitHubAction(t.Context(), check); !errors.Is(err, ErrStaleWork) {
+		t.Fatal("changed PR base did not invalidate the captured event", err)
+	}
+	check.WorkInput, _ = currentForkInput(t, s)
+	if got, err := s.CheckGitHubAction(t.Context(), check); err == nil || got.Permitted {
+		t.Fatal("old explicit PR base accepted after refresh", got, err)
+	}
+	check.PRBase = g.prBase
+	if _, err = s.CheckGitHubAction(t.Context(), check); err != nil {
+		t.Fatal("refreshed exact revisions rejected", err)
+	}
+	api.owner = "successor"
+	if got, err := s.CheckGitHubAction(t.Context(), check); err == nil || got.Permitted {
+		t.Fatal("explicit PR base bypassed task handoff", got, err)
+	}
+	api.owner = "worker"
+	s.Config.Repositories[0].GitHubActions = nil
+	if got, err := s.CheckGitHubAction(t.Context(), check); err == nil || got.Permitted {
+		t.Fatal("explicit PR base bypassed revoked permission", got, err)
+	}
+}
+
+func TestOriginalForkMetadataMayDeclareObservedPRBaseWithoutProof(t *testing.T) {
+	s, g, _ := forkFixture(t)
+	s.Config.Repositories[0].GitHubActions = []string{"edit-pr"}
+	_, w := currentForkInput(t, s)
+	g.pr, g.prBranch, g.remoteHead, g.prBase = 7, w.Fork.Branch, g.upstream, g.target
+	tree := fixtureGit(t, g.repository, "", "rev-parse", g.target+"^{tree}")
+	g.target = syntheticCommit(t, g.repository, tree, g.target)
+	if err := s.Collect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	in, w := currentForkInput(t, s)
+	check := GitHubActionInput{WorkInput: in, Action: "edit-pr", Head: g.remoteHead, Base: g.target, PRBase: g.prBase, Ref: w.Fork.Branch}
+	if got, err := s.CheckGitHubAction(t.Context(), check); err != nil || !got.Permitted {
+		t.Fatal("original metadata edit unnecessarily requires tests", got, err)
+	}
+}
+
+func TestPRBaseParameterIsLimitedToForkMetadata(t *testing.T) {
+	s, _, _, in := delegatedFixture(t)
+	s.Config.Repositories[0].GitHubActions = []string{"edit-pr"}
+	ev := currentEvent(t, s)
+	w, err := s.WorkContext(t.Context(), ev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.EventID, in.EvidenceVersion, in.GuideVersion, in.Action = ev.ID, w.CurrentVersion, w.Guide.Version, "edit-pr"
+	if _, err = s.LinkTask(t.Context(), in.WorkInput); err != nil {
+		t.Fatal(err)
+	}
+	in.PRBase = in.Base
+	if got, err := s.CheckGitHubAction(t.Context(), in); err == nil || got.Permitted {
+		t.Fatal("ordinary PR accepted the fork-only field", got, err)
 	}
 }
 
