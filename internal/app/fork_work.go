@@ -78,6 +78,13 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 	if in.Ref != wantRef {
 		return result, errors.New("write reference is outside the maintenance rule")
 	}
+	// The PR's recorded base can lag the target branch. Capture it separately
+	// for metadata and merge checks; Base still fences the live target and the
+	// validation proof above. Never replace the proof's tested base with PRBase.
+	prBase := in.Base
+	if (in.Action == "edit-pr" || in.Action == "merge") && in.PRBase != "" {
+		prBase = in.PRBase
+	}
 	switch in.Action {
 	case "push":
 		if pull != nil && (pull["state"] != "open" || pull["merged"] == true) {
@@ -104,13 +111,6 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 		if p.PR == 0 || pull["state"] != "open" || pull["merged"] != false || pull["head"] != in.Head || str(facts["remote_head"]) != in.Head || pull["head_ref"] != p.Branch || pull["base"] != f.Target.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
 			return result, errors.New("PR updates require the current open sync PR and its exact branches and revisions")
 		}
-		// Metadata edits capture the PR's reported base independently of the
-		// live target. Base still fences the current target and tested proof
-		// above; PRBase neither substitutes for that proof nor permits merging.
-		prBase := in.Base
-		if in.Action == "edit-pr" && in.PRBase != "" {
-			prBase = in.PRBase
-		}
 		if pull["base_sha"] != prBase {
 			return result, errors.New("PR base revision differs; refresh context and for fork edit-pr pass the observed PR base as pr_base while keeping base at the current target")
 		}
@@ -121,8 +121,11 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 		result.Branch, result.TargetBranch = p.Branch, f.Target.Branch
 		return result, nil
 	case "merge":
-		if p.PR == 0 || pull["state"] != "open" || pull["draft"] != false || pull["merged"] == true || pull["head"] != in.Head || pull["base_sha"] != in.Base {
+		if p.PR == 0 || pull["state"] != "open" || pull["draft"] != false || pull["merged"] != false || pull["head"] != in.Head || str(facts["remote_head"]) != in.Head || pull["head_ref"] != p.Branch || pull["base"] != f.Target.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
 			return result, errors.New("merge requires the current tested open non-draft sync PR")
+		}
+		if pull["base_sha"] != prBase {
+			return result, errors.New("PR base revision differs; refresh context and pass the observed PR base as pr_base while keeping base at the current tested target")
 		}
 	case "comment", "review", "close":
 		if p.PR == 0 || pull["head"] != in.Head {
@@ -135,7 +138,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 	if p.SyncMode == adaptedBatches {
 		mergeMethod = "squash"
 	}
-	return GitHubActionCheck{ExpectedRemoteHead: replacementHead, GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: f.Target.Branch, Verification: "Current owner, delegation, branch and revisions checked. Only normal fast-forward pushes are permitted unless expected_remote_head is returned under an exact operator replacement grant; then use --force-with-lease=refs/heads/<branch>:<expected_remote_head>, never an unconditional force push; merge this PR using " + mergeMethod + " and expected head, without bypassing repository rules. Inspect current CI and reviews. This check performs no GitHub write."}, nil
+	return GitHubActionCheck{ExpectedRemoteHead: replacementHead, GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: f.Target.Branch, Verification: "Current owner, delegation, branch and revisions checked. Only normal fast-forward pushes are permitted unless expected_remote_head is returned under an exact operator replacement grant; then use --force-with-lease=refs/heads/<branch>:<expected_remote_head>, never an unconditional force push; merge this PR using " + mergeMethod + " and expected head, without bypassing repository rules. For merge, base is the live tested target; pr_base, if supplied, is the separately checked PR-recorded base. Recheck if either changes; completion still verifies the merge parents and tree against the test proof. Inspect current CI and reviews. This check performs no GitHub write."}, nil
 }
 
 func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkResult) error {
