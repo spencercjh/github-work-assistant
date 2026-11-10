@@ -20,6 +20,7 @@ type Watch struct {
 	Number int    `json:"number"`
 }
 type Config struct {
+	ForkProofRecoveries             []ForkProofRecovery   `json:"fork_proof_recoveries,omitempty"`
 	ForkCIRetries                   []ForkCIRetry         `json:"fork_ci_retries,omitempty"`
 	Forks                           []ForkSpec            `json:"forks,omitempty"`
 	ForkMergeAcceptances            []ForkMergeAcceptance `json:"fork_merge_acceptances,omitempty"`

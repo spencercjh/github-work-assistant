@@ -19,6 +19,7 @@ type Persistence interface {
 	StartForkBatch(context.Context, ForkSpec, ForkProgress, ForkProgress, ForkObservation, string) error
 	SaveForkProgress(context.Context, string, int64, ForkProgress, *WorkResult) error
 	SaveForkTestProof(context.Context, string, int64, ForkProgress, string) error
+	RestoreHistoricalForkProof(context.Context, ForkProofRecoveryReceipt) (ForkProofRecoveryReceipt, error)
 	UpdateForkValidation(context.Context, string, string, string, string) error
 	Close() error
 	Migrate(context.Context) error
