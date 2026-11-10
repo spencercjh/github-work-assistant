@@ -23,8 +23,8 @@ type forkFixtureSource struct {
 	checks                                                          string
 	accessErr                                                       error
 	prBody                                                          *string
-	prBase                                                          string
 	mergeAcceptances                                                []ForkMergeAcceptance
+	prBase, mergedAt                                                string
 }
 
 func (g *forkFixtureSource) CheckIdentity(context.Context) error { return nil }
@@ -57,7 +57,7 @@ func (g *forkFixtureSource) Collect(ctx context.Context, w Watch) ([]byte, error
 	}
 	return canonical(Snapshot{w.Key(), "public", Objects{
 		"issue":   {"title": "Integrate upstream", "number": w.Number},
-		"pull":    {"head": g.remoteHead, "head_ref": g.prBranch, "head_repo": "example/fixture", "base": "main", "base_sha": base, "state": state, "merged": g.merged, "merge_commit_sha": g.mergeCommit, "draft": false},
+		"pull":    {"head": g.remoteHead, "head_ref": g.prBranch, "head_repo": "example/fixture", "base": "main", "base_sha": base, "state": state, "merged": g.merged, "merged_at": g.mergedAt, "merge_commit_sha": g.mergeCommit, "draft": false},
 		"check:1": {"name": "regression", "status": g.checks},
 	}}), nil
 }

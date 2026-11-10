@@ -114,6 +114,9 @@ func (c Config) validateForks() error {
 		}
 		accepted[key] = true
 	}
+	if err := c.validateForkProofRecoveries(); err != nil {
+		return err
+	}
 	return c.validateForkCIRetries()
 }
 
