@@ -258,7 +258,8 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	reviewThreadID := f.String("review-thread", "", "Exact review thread node ID for resolve-review-thread")
 	action := f.String("action", "", "Delegated GitHub action; edit-pr checks title/body updates only")
 	head := f.String("head", "", "Reviewed PR head SHA")
-	base := f.String("base", "", "Reviewed PR base SHA")
+	base := f.String("base", "", "Expected base SHA; fork edit-pr uses the current target SHA")
+	prBase := f.String("pr-base", "", "Observed PR base SHA for fork edit-pr; defaults to --base")
 	request := f.String("request", "", "Operator-supplied UUID; reuse for retries of the same work request")
 	reason := f.String("reason-file", "", "UTF-8 operator work request reason")
 	summaryFile := f.String("summary-file", "", "UTF-8 file containing result summary")
@@ -286,7 +287,7 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 			body, err = os.ReadFile(*bodyFile)
 		}
 		if err == nil {
-			result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base, Ref: *ref, Body: string(body), RunID: *runID, RunAttempt: *runAttempt, JobID: *jobID, ReviewThreadID: *reviewThreadID})
+			result, err = svc.CheckGitHubAction(ctx, app.GitHubActionInput{WorkInput: in, Action: *action, Head: *head, Base: *base, PRBase: *prBase, Ref: *ref, Body: string(body), RunID: *runID, RunAttempt: *runAttempt, JobID: *jobID, ReviewThreadID: *reviewThreadID})
 		}
 	case "test-worktree":
 		if _, err = svc.RefreshWorkContext(ctx, in.EventID); err == nil {

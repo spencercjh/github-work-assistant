@@ -103,6 +103,11 @@ func TestAdaptedProvenanceLargeHTTPBody(t *testing.T) {
 	check.WorkInput, _ = currentForkInput(t, s)
 	check.Action = "edit-pr"
 	assertStatus(canonical(check), http.StatusOK)
+	check.PRBase = check.Base
+	assertStatus(canonical(check), http.StatusOK)
+	check.PRBase = strings.Repeat("a", 40)
+	assertStatus(canonical(check), http.StatusConflict)
+	check.PRBase = check.Base
 	// JSON escapes '<' to six bytes. The complete allowed body must fit even
 	// with this expansion, rather than just when the source text is plain ASCII.
 	check.Body += strings.Repeat("<", (128<<10)-len(check.Body))

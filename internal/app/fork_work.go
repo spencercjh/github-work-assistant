@@ -101,8 +101,18 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 			return result, errors.New("push the validated commit first; reuse an existing sync PR")
 		}
 	case "edit-pr", "resolve-review-thread":
-		if p.PR == 0 || pull["state"] != "open" || pull["merged"] != false || pull["head"] != in.Head || pull["base_sha"] != in.Base || str(facts["remote_head"]) != in.Head || pull["head_ref"] != p.Branch || pull["base"] != f.Target.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
+		if p.PR == 0 || pull["state"] != "open" || pull["merged"] != false || pull["head"] != in.Head || str(facts["remote_head"]) != in.Head || pull["head_ref"] != p.Branch || pull["base"] != f.Target.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
 			return result, errors.New("PR updates require the current open sync PR and its exact branches and revisions")
+		}
+		// Metadata edits capture the PR's reported base independently of the
+		// live target. Base still fences the current target and tested proof
+		// above; PRBase neither substitutes for that proof nor permits merging.
+		prBase := in.Base
+		if in.Action == "edit-pr" && in.PRBase != "" {
+			prBase = in.PRBase
+		}
+		if pull["base_sha"] != prBase {
+			return result, errors.New("PR base revision differs; refresh context and for fork edit-pr pass the observed PR base as pr_base while keeping base at the current target")
 		}
 		if in.Action == "resolve-review-thread" {
 			return s.checkForkReviewThread(ctx, w, in)
