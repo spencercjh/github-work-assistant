@@ -101,7 +101,7 @@ func run() error {
 		secret = string(b)
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
-	needsClaim := c.SharedTasks() && (command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync" || command == "start-sync-batch" || command == "recover-fork-proof")
+	needsClaim := c.SharedTasks() && (command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync" || command == "start-sync-batch" || command == "select-sync-batch" || command == "rebuild-sync-batch" || command == "recover-fork-proof")
 	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || command == "adopt-discussion" || needsClaim) {
 		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
 		if err != nil {
@@ -160,7 +160,7 @@ func run() error {
 			return e
 		}
 		return err
-	case "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync", "start-sync-batch", "recover-fork-proof":
+	case "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync", "start-sync-batch", "select-sync-batch", "rebuild-sync-batch", "recover-fork-proof":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
@@ -234,7 +234,7 @@ func run() error {
 		}
 		return e
 	default:
-		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work, test-worktree, restart-sync, start-sync-batch, finish-work")
+		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work, test-worktree, restart-sync, start-sync-batch, select-sync-batch, rebuild-sync-batch, finish-work")
 	}
 }
 
@@ -246,10 +246,12 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	f.StringVar(&in.EvidenceVersion, "version", "", "Current evidence version")
 	f.StringVar(&in.GuideVersion, "guide", "", "Current guide version")
 	f.StringVar(&in.TaskID, "task", "", "Existing claimed Raft task root UUID")
+	batch := f.String("batch", "", "Exact queue batch ID for selection or rebuild")
 	after := f.String("after", "", "First batch baseline SHA; later batches resume the verified cursor")
 	count := f.Int("count", 1, "Number of oldest next upstream first-parent commits, 1..50")
 	repository := f.String("repo", "", "Existing local clone with the authorized GitHub origin")
 	report := f.String("report", "", "Actual Raft report UUID")
+	reviewOnly := f.Bool("review-only", false, "Queued needs-decision waits only for human review; requires a tested published batch")
 	outcome := f.String("outcome", "", "investigated, changes-ready, needs-decision, waiting or merged")
 	ref := f.String("ref", "", "Exact write branch for fork maintenance")
 	runID := f.Int64("run", 0, "Exact authorized CI workflow run ID")
@@ -259,7 +261,7 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	action := f.String("action", "", "Delegated GitHub action; edit-pr checks title/body updates only")
 	head := f.String("head", "", "Reviewed PR head SHA")
 	base := f.String("base", "", "Expected base SHA; fork edit-pr uses the current target SHA")
-	prBase := f.String("pr-base", "", "Observed PR base SHA for fork edit-pr; defaults to --base")
+	prBase := f.String("pr-base", "", "Observed PR base SHA for fork edit-pr or queued merge/retarget-pr; defaults to --base")
 	request := f.String("request", "", "Operator-supplied UUID; reuse for retries of the same work request")
 	reason := f.String("reason-file", "", "UTF-8 operator work request reason")
 	summaryFile := f.String("summary-file", "", "UTF-8 file containing result summary")
@@ -299,6 +301,10 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 		if err == nil {
 			result, err = svc.StartForkBatch(ctx, app.ForkBatchInput{WorkInput: in, After: *after, Count: *count, Reason: string(body)})
 		}
+	case "select-sync-batch":
+		result, err = svc.SelectForkBatch(ctx, app.ForkQueueInput{WorkInput: in, Batch: *batch})
+	case "rebuild-sync-batch":
+		result, err = svc.RebuildForkBatch(ctx, app.ForkQueueInput{WorkInput: in, Batch: *batch})
 	case "restart-sync":
 		result, err = svc.RestartFork(ctx, in)
 	case "finish-work":
@@ -337,7 +343,7 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 		var summary []byte
 		summary, err = os.ReadFile(*summaryFile)
 		if err == nil {
-			err = svc.RecordWorkResult(ctx, app.WorkResult{WorkInput: in, ReportID: *report, Outcome: *outcome, Summary: string(summary)})
+			err = svc.RecordWorkResult(ctx, app.WorkResult{ReviewOnly: *reviewOnly, WorkInput: in, ReportID: *report, Outcome: *outcome, Summary: string(summary)})
 			result = map[string]bool{"recorded": err == nil}
 		}
 	case "prepare-worktree", "verify-worktree":

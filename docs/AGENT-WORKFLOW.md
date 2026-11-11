@@ -31,7 +31,7 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 
 只有 `execute=true` 才执行仓库工作；`execute=false` 表示当前没有执行权限。先按上述规则处理归自己的 `todo`、`done` 或 `in_review`，再核验；仍不可执行时正常停止，不需要向用户汇报竞争失败。例外仅限原负责人保存 Done 后普通动态的 `quiet` 判断，以及通过 `finish-work` 核验收尾；两者均不授予仓库操作权限。任务创建回执尚未写入本机时检查会失败，等待投递确认后再核对同一个任务，不创建替代任务。对外发消息、修改仓库前再次检查。`--executor` 必须填写自己的名称，不能冒用当前负责人；本机 CLI 由同一系统账号下的可信执行者共用，该参数不是身份认证机制。
 
-`record-triage`、`link-task`、`record-work-result`、`prepare-worktree`、`verify-worktree`、`test-worktree`、`restart-sync`、`start-sync-batch`、`check-github-action`、`finish-work` 都必须传入同一个 `--executor`。程序在操作前读取实时 Raft 归属；除上述收尾和静默判断外，要求任务为 `in_progress`。任务状态与本机写入不在同一个事务中，因此交接时须先让原执行者停止操作；这项检查不能撤销已经开始的外部副作用。
+`record-triage`、`link-task`、`record-work-result`、`prepare-worktree`、`verify-worktree`、`test-worktree`、`restart-sync`、`start-sync-batch`、`select-sync-batch`、`rebuild-sync-batch`、`check-github-action`、`finish-work` 都必须传入同一个 `--executor`。程序在操作前读取实时 Raft 归属；除上述收尾和静默判断外，要求任务为 `in_progress`。任务状态与本机写入不在同一个事务中，因此交接时须先让原执行者停止操作；这项检查不能撤销已经开始的外部副作用。
 
 `work-context.discussion` 指向固定通知任务。若 `work-context.task` 还关联了工程任务，先核对其当前负责人；没有原工程任务归属时只交接新证据，不并行修改。工程命令同时校验固定通知任务和工程任务的归属。
 
@@ -155,3 +155,5 @@ raft task claim --target '#github-work' --number "$TASK_NUMBER"
 ## 持续维护 fork
 
 当上下文包含 `fork` 时，按[持续维护 fork](FORK-MAINTENANCE.md)执行固定轮次的整合、回归测试和结果核验。每条规则沿用同一项工作，生成的同步 PR 不参与普通 PR 竞争；新上游提交留到当前轮次结束后处理。`guide.fork_sync_mode=adapted-batches` 时，先用 `start-sync-batch` 选择从旧到新的来源范围，在独立目标分支移植并验证实际适配提交；默认模式继续保持原始上游 HEAD。
+
+启用同步队列时，等待人工审阅的已验证批次允许继续准备后续 PR。按[队列流程](FORK-QUEUE.md)选批和重建；后序 PR 的临时目标分支仅供审阅，实际合入必须回到正式目标。

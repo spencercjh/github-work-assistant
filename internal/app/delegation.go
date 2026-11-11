@@ -79,8 +79,8 @@ func (s *Service) CheckGitHubAction(ctx context.Context, in GitHubActionInput) (
 	if w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
 		return result, ErrWorkDenied
 	}
-	if in.PRBase != "" && (w.Fork == nil || in.Action != "edit-pr" || !shaRE.MatchString(in.PRBase)) {
-		return result, errors.New("pr_base requires a full observed PR base SHA and is only supported for fork edit-pr")
+	if in.PRBase != "" && (w.Fork == nil || (in.Action != "edit-pr" && !(w.Fork.Queue != nil && (in.Action == "merge" || in.Action == "retarget-pr"))) || !shaRE.MatchString(in.PRBase)) {
+		return result, errors.New("pr_base requires a full observed PR base SHA and is only supported for fork edit-pr or queued merge/retarget-pr")
 	}
 	if in.Action == "rerun-ci" {
 		return s.checkForkCIRetry(ctx, w, in)
@@ -96,6 +96,9 @@ func (s *Service) CheckGitHubAction(ctx context.Context, in GitHubActionInput) (
 	}
 	if w.Fork != nil {
 		return s.checkForkAction(ctx, w, in)
+	}
+	if in.Action == "retarget-pr" {
+		return result, ErrWorkDenied
 	}
 	var snapshot Snapshot
 	if json.Unmarshal(w.Snapshot, &snapshot) != nil {
