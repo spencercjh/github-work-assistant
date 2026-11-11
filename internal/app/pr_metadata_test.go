@@ -112,7 +112,7 @@ func TestForkMetadataSeparatesPRBaseAndTestedTarget(t *testing.T) {
 	if err != nil || !got.Permitted || got.Base != g.target || got.PRBase != g.prBase || !slices.Equal(got.EditableFields, []string{"title", "body"}) {
 		t.Fatal("tested metadata update rejected while PR base lags", got, err)
 	}
-	for _, scenario := range []string{"omitted PR base", "wrong PR base", "malformed PR base", "old target", "wrong head", "wrong ref", "missing provenance", "merge override", "merge without override", "resolve without override"} {
+	for _, scenario := range []string{"omitted PR base", "wrong PR base", "malformed PR base", "old target", "wrong head", "wrong ref", "missing provenance", "merge using sync ref", "merge without override", "resolve without override"} {
 		t.Run(scenario, func(t *testing.T) {
 			bad := check
 			switch scenario {
@@ -130,8 +130,8 @@ func TestForkMetadataSeparatesPRBaseAndTestedTarget(t *testing.T) {
 				bad.Ref = "main"
 			case "missing provenance":
 				bad.Body = "Updated validation"
-			case "merge override":
-				bad.Action, bad.Ref = "merge", "main"
+			case "merge using sync ref":
+				bad.Action = "merge"
 			case "merge without override":
 				bad.Action, bad.Ref, bad.PRBase = "merge", "main", ""
 			case "resolve without override":

@@ -148,7 +148,7 @@ bin/ghraft -config config.json check-github-action \
   --body-file "$PR_BODY_FILE"
 ```
 
-HTTP/App 对应字段为 `pr_base`。该字段只适用于 fork 的 `edit-pr`，不适用于普通 PR、合并、推送、CI 重试或解决评审讨论。它不会改写已有证明、放宽来源校验或调整 PR 的目标分支。PR base、目标、head 或权限变化后，重新读取并检查；不要复用旧检查结果。
+HTTP/App 对应字段为 `pr_base`。该字段适用于 fork 的 `edit-pr`、`merge`，以及队列模式下的 `retarget-pr`，不适用于普通 PR、推送、CI 重试或解决评审讨论。合入时仍需单独的 `merge` 权限及当前目标的完整通过证明，详见[合入检查](FORK-MAINTENANCE.md#推送评审和合入)。该字段不会改写已有证明或放宽来源校验；只有单独授权的队列 `retarget-pr` 检查可以允许调整 PR 的目标分支，详见[队列模式](FORK-QUEUE.md)。PR base、目标、head 或权限变化后，重新读取并检查；不要复用旧检查结果。
 
 ```bash
 gh pr edit "$PR_NUMBER" --repo "$REPOSITORY" \

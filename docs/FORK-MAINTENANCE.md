@@ -174,7 +174,19 @@ work=(--event "$EVENT_ID" --executor "$EXECUTOR"
   --action merge --head "$HEAD_SHA" --base "$TARGET_SHA" --ref "$TARGET_BRANCH"
 ```
 
-该检查核对上游原始提交及其合并结果的测试证明、远端 PR head/base、目标分支和当前归属；它不判定审阅质量，也不锁定 GitHub 分支。执行者应使用 `gh pr merge --merge --match-head-commit "$HEAD_SHA"`，不绕过保护规则。检查和远端写入之间仍可能有并发更新，必须核验实际结果；合并队列中的等待状态不代表已合入。
+若 PR API 的 `base.sha` 与当前目标分支不同，另传 `--pr-base` 声明本次读取的 PR base：
+
+```bash
+"$INSTANCE/run" check-github-action "${work[@]}" \
+  --action merge --head "$HEAD_SHA" --base "$TARGET_SHA" \
+  --pr-base "$OBSERVED_PR_BASE_SHA" --ref "$TARGET_BRANCH"
+```
+
+`--base` 始终表示当前目标提交，必须与通过证明中的 `validated_base` 一致；`--pr-base` 只与 PR 快照中记录的 base 精确匹配。未传时，两者须相同。该参数不会改写证明或授权合入，目标前进后仍需验证新的合并结果。任何版本、权限或来源变化后，应刷新上下文并重新检查。
+
+已获准使用 Stamp 的仓库需注意参数含义不同：[Stamp 的批准规则](https://docs.stamp.build/agents/review/#rules)把批准绑定到 PR 记录的 base，而不是目标分支 tip。因此，Stamp 批准和合并命令的 `--base` 使用 `stamp pr view` 返回的 `baseSha`；维护工具的 `--base` 仍使用实际受测目标。审阅证据应同时记录两个值。Stamp 的批准不能替代维护工具对当前目标及测试证明的检查。
+
+该检查核对上游原始提交及其合并结果的测试证明、远端 PR head、记录的 base、目标分支和当前归属；它不判定审阅质量，也不锁定 GitHub 分支。执行者应使用 `gh pr merge --merge --match-head-commit "$HEAD_SHA"`，不绕过保护规则。检查和远端写入之间仍可能有并发更新，必须核验实际结果；合并队列中的等待状态不代表已合入。
 
 ### 合入后的收尾
 
@@ -240,7 +252,7 @@ work=(--event "$EVENT_ID" --executor "$EXECUTOR"
 
 推送和 PR 创建仍使用前文的 `check-github-action` 流程，`HEAD_SHA` 改为实际适配提交。适配模式创建或修改 PR 正文时，另传 `--body-file pr-body.md`，使用准备实际发布的完整正文。程序核对正文是否包含本次受测清单；推送前也会核对本地清单。创建草稿 PR，除非用户明确授权其他状态。写入后重新读取远端正文；保存 `changes-ready`、记录合入或执行合入检查时，程序还会核对远端清单。
 
-标题／正文更新时，`--base` 始终使用当前目标 SHA；若 PR API 返回不同的 base，另传 `--pr-base` 捕获该值。详见[更新 PR 标题和正文](REPOSITORY-WORK.md#更新已有-pr-的标题和正文)。两个版本分别核对，不复用旧目标的测试证明，也不改变合入要求。
+标题／正文更新及合入检查时，`--base` 始终使用当前目标 SHA；若 PR API 返回不同的 base，另传 `--pr-base` 捕获该值。详见[更新 PR 标题和正文](REPOSITORY-WORK.md#更新已有-pr-的标题和正文)。两个版本分别核对，不复用旧目标的测试证明，也不改变合入要求。
 
 源提交、目标、可信指引或清单改变后重新测试。程序验证的是提交与声明来源的一一对应，无法仅凭尾注或理由证明移植语义、已有实现及不适用判断正确；这些仍需测试和人工审阅。是否可自动合入由单独的 `merge` 授权及指引决定。
 

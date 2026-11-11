@@ -13,7 +13,7 @@ import (
 
 func TestAdaptedProvenanceLargeHTTPBody(t *testing.T) {
 	s, g, api := forkFixtureConfigured(t, true)
-	s.Config.Repositories[0].GitHubActions = []string{"push", "open-pr", "edit-pr"}
+	s.Config.Repositories[0].GitHubActions = []string{"push", "open-pr", "edit-pr", "merge"}
 	after := fixtureGit(t, g.repository, "", "rev-parse", g.upstream+"^")
 	upstreamTree := fixtureGit(t, g.repository, "", "rev-parse", g.upstream+"^{tree}")
 	mergedTree := fixtureGit(t, g.repository, "", "merge-tree", "--write-tree", g.target, g.upstream)
@@ -107,7 +107,11 @@ func TestAdaptedProvenanceLargeHTTPBody(t *testing.T) {
 	assertStatus(canonical(check), http.StatusOK)
 	check.PRBase = strings.Repeat("a", 40)
 	assertStatus(canonical(check), http.StatusConflict)
-	check.PRBase = check.Base
+	check.Action, check.Ref, check.PRBase = "merge", "main", check.Base
+	assertStatus(canonical(check), http.StatusOK)
+	check.PRBase = strings.Repeat("a", 40)
+	assertStatus(canonical(check), http.StatusConflict)
+	check.Action, check.Ref, check.PRBase = "edit-pr", w.Fork.Branch, check.Base
 	// JSON escapes '<' to six bytes. The complete allowed body must fit even
 	// with this expansion, rather than just when the source text is plain ASCII.
 	check.Body += strings.Repeat("<", (128<<10)-len(check.Body))
