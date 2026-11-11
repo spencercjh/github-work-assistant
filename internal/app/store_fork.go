@@ -31,6 +31,7 @@ func (s *Store) ForkProgress(ctx context.Context, key string) (ForkProgress, err
 }
 
 func writeForkProgress(ctx context.Context, tx *database.Tx, key string, p ForkProgress) error {
+	syncQueueProjection(&p)
 	return tx.Upsert(ctx, &metaRecord{forkProgressName(key), string(canonical(p))}, []string{"name"}, []string{"value"})
 }
 
@@ -61,19 +62,11 @@ func (s *Store) ObserveFork(ctx context.Context, spec ForkSpec, expected ForkPro
 		}
 	}
 	if o.PR > 0 {
-		name := forkPRName(Watch{spec.Target.Repo, o.PR})
-		var owner string
-		err = tx.QueryRowContext(ctx, `SELECT value FROM ghraft_meta WHERE name=?`, name).Scan(&owner)
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return err
-		}
-		if owner != "" && owner != spec.Key() {
-			return errors.New("sync PR already belongs to another maintenance rule")
-		}
-		if err = tx.Upsert(ctx, &metaRecord{name, spec.Key()}, []string{"name"}, nil); err != nil {
+		if err = associateForkPR(ctx, tx, spec, o.PR); err != nil {
 			return err
 		}
 	}
+
 	// An ended round's PR must not be attached to the next round's snapshot.
 	if next.Round != p.Round {
 		o.PR, o.Objects, o.SyncHead, o.MergeCommit = 0, nil, "", ""
@@ -244,4 +237,17 @@ func (s *Store) saveForkProgress(ctx context.Context, key string, revision int64
 		return err
 	}
 	return tx.Commit()
+}
+
+func associateForkPR(ctx context.Context, tx *database.Tx, spec ForkSpec, pr int) error {
+	name := forkPRName(Watch{spec.Target.Repo, pr})
+	var owner string
+	err := tx.QueryRowContext(ctx, `SELECT value FROM ghraft_meta WHERE name=?`, name).Scan(&owner)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if owner != "" && owner != spec.Key() {
+		return errors.New("sync PR already belongs to another maintenance rule")
+	}
+	return tx.Upsert(ctx, &metaRecord{name, spec.Key()}, []string{"name"}, nil)
 }

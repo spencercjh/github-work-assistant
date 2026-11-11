@@ -33,6 +33,7 @@ type RepositoryPolicy struct {
 }
 
 type RepositoryGuide struct {
+	ForkQueue             *ForkQueueConfig       `json:"fork_queue,omitempty"`
 	ResolveReviewThreads  bool                   `json:"resolve_review_threads,omitempty"`
 	ForkSyncMode          string                 `json:"fork_sync_mode,omitempty"`
 	SyncBranchReplacement *SyncBranchReplacement `json:"sync_branch_replacement,omitempty"`
@@ -64,7 +65,7 @@ func (p RepositoryPolicy) validate() error {
 	}
 	seen := map[string]bool{}
 	for _, action := range p.GitHubActions {
-		if !slices.Contains([]string{"comment", "review", "push", "open-pr", "edit-pr", "merge", "close"}, action) || seen[action] {
+		if !slices.Contains([]string{"comment", "review", "push", "open-pr", "edit-pr", "retarget-pr", "merge", "close"}, action) || seen[action] {
 			return errors.New("github_actions contains an unknown or duplicate action")
 		}
 		seen[action] = true

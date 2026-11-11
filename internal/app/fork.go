@@ -19,10 +19,11 @@ type BranchRef struct {
 	Branch string `json:"branch"`
 }
 type ForkSpec struct {
-	ID              string    `json:"id"`
-	Upstream        BranchRef `json:"upstream"`
-	Target          BranchRef `json:"target"`
-	LocalRepository string    `json:"local_repository,omitempty"`
+	ID              string           `json:"id"`
+	Upstream        BranchRef        `json:"upstream"`
+	Target          BranchRef        `json:"target"`
+	LocalRepository string           `json:"local_repository,omitempty"`
+	Queue           *ForkQueueConfig `json:"queue,omitempty"`
 }
 
 // An operator may acknowledge one already published merge without authorizing
@@ -57,8 +58,13 @@ func validBranch(s string) bool {
 	}
 	return true
 }
-func (f ForkSpec) Key() string     { return "fork:" + f.ID }
-func (f ForkSpec) Version() string { return hash(canonical(f)) }
+func (f ForkSpec) Key() string { return "fork:" + f.ID }
+func (f ForkSpec) Version() string {
+	// Queue policy may change without changing the maintained repository pair.
+	// The complete policy is still included in the guide's proof fingerprint.
+	f.Queue = nil
+	return hash(canonical(f))
+}
 func (c Config) Fork(key string) (ForkSpec, bool) {
 	for _, f := range c.Forks {
 		if f.Key() == key {
@@ -94,6 +100,9 @@ func (c Config) validateForks() error {
 		if g.ForkSyncMode == adaptedBatches && f.LocalRepository == "" {
 			return errors.New("adapted batches require a complete local_repository")
 		}
+		if f.Queue != nil && (g.ForkSyncMode != adaptedBatches || f.Queue.MaxOpenPRs < 0 || f.Queue.MaxOpenPRs > 50) {
+			return errors.New("fork queue requires adapted-batches and max_open_prs in 1..50 (0 defaults to 10)")
+		}
 		if g.Mode != "local-edit" || len(g.TestCommands) == 0 {
 			return errors.New("fork maintenance requires an explicit local-edit target policy and regression commands")
 		}
@@ -123,6 +132,22 @@ func (c Config) validateForks() error {
 // Only progress needed to recover is persisted. Source and review bodies remain
 // in the current snapshot, while old reports follow ordinary retention rules.
 type ForkProgress struct {
+	GenerationAt       int64           `json:"generation_at,omitempty"`
+	IntegrationBase    string          `json:"integration_base,omitempty"`
+	Queue              *ForkQueueState `json:"queue,omitempty"`
+	BatchID            string          `json:"batch_id,omitempty"`
+	ParentBatch        string          `json:"parent_batch,omitempty"`
+	ParentHead         string          `json:"parent_head,omitempty"`
+	TargetBranch       string          `json:"target_branch,omitempty"`
+	QueueStale         string          `json:"queue_stale,omitempty"`
+	RebuildSourceHead  string          `json:"rebuild_source_head,omitempty"`
+	RetargetFrom       string          `json:"retarget_from,omitempty"`
+	RebuildFromHead    string          `json:"rebuild_from_head,omitempty"`
+	RebuildFromBase    string          `json:"rebuild_from_base,omitempty"`
+	PendingPublishFrom string          `json:"pending_publish_from,omitempty"`
+	CreatedAt          int64           `json:"created_at,omitempty"`
+	ReadyAt            int64           `json:"ready_at,omitempty"`
+	MergedAt           int64           `json:"merged_at,omitempty"`
 	AdaptationBaseline string          `json:"adaptation_baseline,omitempty"`
 	SyncMode           string          `json:"sync_mode,omitempty"`
 	BatchAfter         string          `json:"batch_after,omitempty"`
@@ -154,6 +179,7 @@ type ForkProgress struct {
 }
 
 type ForkObservation struct {
+	IntegrationTarget string
 	PrivateRepos      []string
 	MergeVerified     bool
 	MergeCommit       string
@@ -204,6 +230,10 @@ func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
 	g, err := d.guide(c, adaptedMergeInstruction)
 	if err == nil && d.Fork != nil && g.ForkSyncMode == adaptedBatches {
 		g.Text += "\n\n" + adaptedProvenanceInstruction
+		if d.Fork.Queue != nil {
+			g.ForkQueue = d.Fork.Queue
+			g.Text += "\n\n" + forkQueueInstruction
+		}
 		g.Version = ""
 		g.Version = hash(canonical(g))
 	}
@@ -242,6 +272,16 @@ func (s *Service) collectFork(ctx context.Context, spec ForkSpec) error {
 	}
 	if progress.SpecVersion != "" && progress.SpecVersion != spec.Version() {
 		return errors.New("fork rule changed; use a new ID for a different branch relationship")
+	}
+	if progress.Queue != nil {
+		err := s.collectForkQueue(ctx, spec, progress, g)
+		if errors.Is(err, ErrRepositoryNotAllowed) || errors.Is(err, ErrGitHubAccessDenied) {
+			return errors.Join(err, s.Store.SetBlocked(ctx, spec.Key(), true))
+		}
+		if err != nil {
+			return err
+		}
+		return s.Store.SetBlocked(ctx, spec.Key(), false)
 	}
 	facts, err := g.CollectFork(ctx, spec, progress)
 	if err != nil {
@@ -301,7 +341,8 @@ func planFork(spec ForkSpec, p ForkProgress, o ForkObservation, now int64) ForkP
 }
 
 func forkSnapshot(spec ForkSpec, p ForkProgress, o ForkObservation) []byte {
-	objects := o.Objects
+	objects := Objects{}
+	_ = json.Unmarshal(canonical(o.Objects), &objects)
 	if objects == nil {
 		objects = Objects{}
 	}
@@ -312,6 +353,14 @@ func forkSnapshot(spec ForkSpec, p ForkProgress, o ForkObservation) []byte {
 		facts["observed_upstream_sha"] = o.Upstream
 		facts["adaptation_baseline"] = p.AdaptationBaseline
 		facts["next_batch_ready"] = p.Phase == "synced" && p.Upstream != o.Upstream
+	}
+	if p.Queue != nil {
+		objects["fork"]["target_branch"] = forkTargetBranch(spec, p)
+		objects["fork"]["integration_target_sha"] = o.IntegrationTarget
+		objects["fork"]["integration_branch"] = spec.Target.Branch
+		objects["fork"]["batch_id"] = p.BatchID
+		queueSnapshot(p, objects)
+		objects["fork-queue"]["limit"] = spec.queueLimit()
 	}
 	return canonical(Snapshot{spec.Key(), o.Classification, objects})
 }
@@ -362,7 +411,8 @@ func (s *Service) checkForkAccess(ctx context.Context, f ForkSpec) error {
 func (c Config) managedPR(w Watch, snapshot Snapshot) bool {
 	pull := snapshot.Objects["pull"]
 	for _, f := range c.Forks {
-		if strings.EqualFold(w.Repo, f.Target.Repo) && strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) && pull["base"] == f.Target.Branch && strings.HasPrefix(str(pull["head_ref"]), "ghraft/sync/"+f.ID+"/") {
+		queueBase := f.Queue != nil && strings.HasPrefix(str(pull["base"]), "ghraft/sync/"+f.ID+"/")
+		if strings.EqualFold(w.Repo, f.Target.Repo) && strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) && (pull["base"] == f.Target.Branch || queueBase) && strings.HasPrefix(str(pull["head_ref"]), "ghraft/sync/"+f.ID+"/") {
 			return true
 		}
 	}

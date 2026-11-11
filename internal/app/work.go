@@ -38,6 +38,7 @@ type WorkInput struct {
 	TaskID          string `json:"raft_task_message_id"`
 }
 type WorkResult struct {
+	ReviewOnly bool `json:"review_only,omitempty"`
 	WorkInput
 	ReportID string `json:"raft_report_message_id"`
 	Outcome  string `json:"outcome"`
@@ -203,6 +204,9 @@ func (s *Service) RecordWorkResult(ctx context.Context, in WorkResult) error {
 	}
 	if w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.Target != w.Guide.TaskTarget || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
 		return errors.New("bind current evidence to the existing Raft task before reporting")
+	}
+	if in.ReviewOnly && (w.Fork == nil || w.Fork.Queue == nil || in.Outcome != "needs-decision") {
+		return errors.New("review_only is limited to a queued fork waiting solely for human review")
 	}
 	if in.Outcome == "changes-ready" && w.Guide.Mode != "local-edit" {
 		return ErrWorkDenied

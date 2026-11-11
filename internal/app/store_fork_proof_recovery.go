@@ -44,6 +44,10 @@ func (s *Store) RestoreHistoricalForkProof(ctx context.Context, receipt ForkProo
 		return empty, err
 	}
 	next := restoreForkProof(p, receipt.Archived)
+	// RecoverForkProof has verified this head's original proof against its actual
+	// merge. Clear only its execution hold; dependent batches and the real latest
+	// validation attempt remain unchanged. The receipt retains the prior hold.
+	next.QueueStale = ""
 	next.Revision++
 	if err = writeForkProgress(ctx, tx, receipt.Resource, next); err != nil {
 		return empty, err

@@ -101,6 +101,9 @@ func checkArchivedForkProof(a, w WorkContext, in WorkInput, f ForkSpec) error {
 	if p.SyncMode != adaptedBatches || p.SpecVersion != f.Version() || p.SpecVersion != current.SpecVersion || p.Round != current.Round || p.PR != current.PR || p.Branch != current.Branch || p.InitialTarget != current.InitialTarget || p.Upstream != current.Upstream || p.BatchAfter != current.BatchAfter || p.LastSuccess != current.LastSuccess || !slices.Equal(p.BatchCommits, current.BatchCommits) {
 		return errors.New("archive belongs to a different fork round, PR or source batch")
 	}
+	if p.BatchID != current.BatchID || p.ParentBatch != current.ParentBatch || p.ParentHead != current.ParentHead || p.TargetBranch != current.TargetBranch || p.IntegrationBase != current.IntegrationBase {
+		return errors.New("archive belongs to a different queue dependency generation")
+	}
 	v := p.Validation
 	if !validForkProofHead(*p) || !shaRE.MatchString(p.ValidatedBase) || !shaRE.MatchString(p.ValidatedTree) || p.ValidatedGuide != in.GuideVersion || !idRE.MatchString(p.ValidatedMapping) || !idRE.MatchString(p.TestLogHash) || v == nil || v.State != "passed" || !idRE.MatchString(v.ID) || v.Round != p.Round || v.Head != p.ValidatedHead || v.Base != p.ValidatedBase || v.Guide != p.ValidatedGuide || v.Log != p.TestLog || v.StartedAt <= 0 || v.FinishedAt < v.StartedAt || v.FinishedAt >= v.Deadline || a.ObservedAt < v.FinishedAt {
 		return errors.New("archive does not contain a completed, matching pre-merge test proof")
@@ -119,19 +122,36 @@ func checkArchivedForkProof(a, w WorkContext, in WorkInput, f ForkSpec) error {
 	return nil
 }
 
+// Recovery may repair a stale proof only for the queue head already merged into
+// integration. Ordinary execution still requires queueWorkAllowed. Exact grant,
+// archived proof and live merge checks below remain mandatory for restoration.
+func requireForkProofRecovery(w WorkContext, in WorkInput, f ForkSpec) error {
+	if err := requireForkExecution(w, in); err != nil {
+		return err
+	}
+	p := w.Fork
+	if p.Queue != nil && (p.BatchID != queueHead(*p) || p.ParentBatch != "" || forkTargetBranch(f, *p) != f.Target.Branch) {
+		return errors.New("historical recovery requires the queue head targeting integration")
+	}
+	if queueValidationRunning(*p) {
+		return errors.New("cannot recover proof while a validation is running")
+	}
+	return nil
+}
+
 func (s *Service) RecoverForkProof(ctx context.Context, in WorkInput) (ForkProofRecoveryReceipt, error) {
 	var empty ForkProofRecoveryReceipt
 	w, err := s.CheckWork(ctx, in)
 	if err != nil {
 		return empty, err
 	}
-	if err = requireForkWork(w, in); err != nil {
+	f, _ := s.Config.Fork(w.Event.Key)
+	if err = requireForkProofRecovery(w, in, f); err != nil {
 		return empty, err
 	}
 	if err = s.Config.validateForkProofRecoveries(); err != nil {
 		return empty, err
 	}
-	f, _ := s.Config.Fork(w.Event.Key)
 	var grant *ForkProofRecovery
 	for _, a := range s.Config.ForkProofRecoveries {
 		if a.ForkID == f.ID && a.PR == w.Fork.PR {
@@ -209,7 +229,7 @@ func (s *Service) RecoverForkProof(ctx context.Context, in WorkInput) (ForkProof
 	if err != nil {
 		return empty, err
 	}
-	if err = requireForkWork(latest, in); err != nil {
+	if err = requireForkProofRecovery(latest, in, f); err != nil {
 		return empty, err
 	}
 	if latest.Fork.Revision != w.Fork.Revision {

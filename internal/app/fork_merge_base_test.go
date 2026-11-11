@@ -70,7 +70,7 @@ func TestForkMergeSeparatesPRBaseAndTestedTarget(t *testing.T) {
 			if err != nil || !got.Permitted || got.Base != g.target || got.PRBase != g.prBase || got.Head != ws.Head || got.Repository != "example/fixture" || got.Number != 7 || len(got.EditableFields) != 0 {
 				t.Fatal("tested merge with independently checked PR base rejected", got, err)
 			}
-			for _, scenario := range []string{"omitted PR base", "wrong PR base", "malformed PR base", "old target", "wrong head", "sync branch", "push", "open-pr", "comment", "review", "close", "rerun-ci", "resolve-review-thread"} {
+			for _, scenario := range []string{"omitted PR base", "wrong PR base", "malformed PR base", "old target", "wrong head", "sync branch", "push", "open-pr", "comment", "review", "close", "rerun-ci", "resolve-review-thread", "retarget-pr"} {
 				t.Run(scenario, func(t *testing.T) {
 					bad := check
 					switch scenario {
@@ -219,5 +219,46 @@ func TestOrdinaryPRMergeRejectsRecordedBaseParameter(t *testing.T) {
 	in.Action, in.PRBase = "merge", strings.Repeat("a", 40)
 	if got, err := s.CheckGitHubAction(t.Context(), in); err == nil || got.Permitted {
 		t.Fatal("ordinary PR accepted the fork-only field", got, err)
+	}
+}
+
+func TestQueuedMergeRecordedBaseKeepsQueueFences(t *testing.T) {
+	s, q, _, after := newQueueFixture(t)
+	appendQueue(t, s, after)
+	first := publishQueue(t, s, q)
+	appendQueue(t, s, "")
+	second := publishQueue(t, s, q)
+	// The PR can retain an older base SHA even when its current target and
+	// validation proof agree. The override must never allow merging a child.
+	r := q.prs[first.Branch]
+	if after == q.target {
+		t.Fatal("fixture must distinguish recorded base from tested target")
+	}
+	r.baseSHA = after
+	selectQueue(t, s, first.BatchID)
+	in, _ := queueInput(t, s)
+	check := GitHubActionInput{WorkInput: in, Action: "merge", Ref: "main", Head: first.ValidatedHead, Base: q.target, PRBase: r.baseSHA}
+	got, err := s.CheckGitHubAction(t.Context(), check)
+	if err != nil || !got.Permitted || got.TargetBranch != "main" || got.Base != q.target || got.PRBase != after {
+		t.Fatal("queue head with a separately captured PR base rejected", got, err)
+	}
+	for _, badBase := range []string{"", q.target} {
+		bad := check
+		bad.PRBase = badBase
+		if got, err := s.CheckGitHubAction(t.Context(), bad); err == nil || got.Permitted {
+			t.Fatal("queue merge accepted an uncaptured PR base", got, err)
+		}
+	}
+	selectQueue(t, s, second.BatchID)
+	in, _ = queueInput(t, s)
+	child := GitHubActionInput{WorkInput: in, Action: "merge", Ref: "main", Head: second.ValidatedHead, Base: second.InitialTarget, PRBase: q.prs[second.Branch].baseSHA}
+	if got, err := s.CheckGitHubAction(t.Context(), child); err == nil || got.Permitted || !strings.Contains(err.Error(), "first unfinished batch") {
+		t.Fatal("captured PR base bypassed the queue-head fence", got, err)
+	}
+	selectQueue(t, s, first.BatchID)
+	r.check = "failure"
+	check.WorkInput, _ = queueInput(t, s)
+	if got, err := s.CheckGitHubAction(t.Context(), check); err == nil || got.Permitted || !strings.Contains(err.Error(), "current CI failed") {
+		t.Fatal("captured PR base bypassed current CI failure", got, err)
 	}
 }

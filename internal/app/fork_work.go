@@ -15,7 +15,7 @@ func requireForkContext(w WorkContext, in WorkInput) error {
 	return nil
 }
 
-func requireForkWork(w WorkContext, in WorkInput) error {
+func requireForkExecution(w WorkContext, in WorkInput) error {
 	if err := requireForkContext(w, in); err != nil {
 		return err
 	}
@@ -25,7 +25,17 @@ func requireForkWork(w WorkContext, in WorkInput) error {
 	if w.Fork.SyncMode != w.Guide.ForkSyncMode {
 		return errors.New("sync mode changed; select an authorized batch before modifying work")
 	}
+	if w.Fork.Queue != nil && w.Guide.ForkQueue == nil {
+		return errors.New("queue policy disabled; restore policy or drain the queue before continuing")
+	}
 	return nil
+}
+
+func requireForkWork(w WorkContext, in WorkInput) error {
+	if err := requireForkExecution(w, in); err != nil {
+		return err
+	}
+	return queueWorkAllowed(*w.Fork, w.Guide.Version)
 }
 
 func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubActionInput) (GitHubActionCheck, error) {
@@ -35,13 +45,14 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 	}
 	f, _ := s.Config.Fork(w.Event.Key)
 	p, facts := w.Fork, forkFacts(w)
+	targetBranch := forkTargetBranch(f, *p)
 	var snapshot Snapshot
 	_ = json.Unmarshal(w.Snapshot, &snapshot)
 	pull := snapshot.Objects["pull"]
 	if !shaRE.MatchString(in.Head) || in.Base != str(facts["target_sha"]) {
 		return result, ErrStaleWork
 	}
-	if in.Action == "push" || in.Action == "open-pr" || in.Action == "merge" || in.Action == "resolve-review-thread" || (p.SyncMode == adaptedBatches && in.Action == "edit-pr") {
+	if in.Action == "push" || in.Action == "open-pr" || in.Action == "merge" || in.Action == "resolve-review-thread" || in.Action == "retarget-pr" || (p.SyncMode == adaptedBatches && in.Action == "edit-pr") {
 		if p.ValidatedHead != in.Head || p.ValidatedGuide != in.GuideVersion || p.ValidatedBase != in.Base || !validForkProofHead(*p) || !shaRE.MatchString(p.ValidatedTree) {
 			return result, errors.New("run test-worktree for this commit, target and guide before writing")
 		}
@@ -97,7 +108,8 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 			}
 			if _, err = gitLocal(ctx, local.Path, "merge-base", "--is-ancestor", remote, in.Head); err != nil {
 				r := w.Guide.SyncBranchReplacement
-				if r == nil || r.Branch != p.Branch || r.From != remote || r.To != in.Head {
+				queueLease := p.Queue != nil && p.RebuildFromHead == remote && shaRE.MatchString(p.RebuildFromBase)
+				if !queueLease && (r == nil || r.Branch != p.Branch || r.From != remote || r.To != in.Head) {
 					return result, errors.New("existing remote branch is not an ancestor of pinned upstream; request an exact branch replacement or restart decision")
 				}
 				replacementHead = remote
@@ -108,7 +120,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 			return result, errors.New("push the validated commit first; reuse an existing sync PR")
 		}
 	case "edit-pr", "resolve-review-thread":
-		if p.PR == 0 || pull["state"] != "open" || pull["merged"] != false || pull["head"] != in.Head || str(facts["remote_head"]) != in.Head || pull["head_ref"] != p.Branch || pull["base"] != f.Target.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
+		if p.PR == 0 || pull["state"] != "open" || pull["merged"] != false || pull["head"] != in.Head || str(facts["remote_head"]) != in.Head || pull["head_ref"] != p.Branch || pull["base"] != targetBranch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
 			return result, errors.New("PR updates require the current open sync PR and its exact branches and revisions")
 		}
 		if pull["base_sha"] != prBase {
@@ -118,11 +130,24 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 			return s.checkForkReviewThread(ctx, w, in)
 		}
 		result = prMetadataCheck(in, f.Target.Repo, p.PR)
-		result.Branch, result.TargetBranch = p.Branch, f.Target.Branch
+		result.Branch, result.TargetBranch = p.Branch, targetBranch
 		return result, nil
+	case "retarget-pr":
+		if p.Queue == nil || p.RetargetFrom == "" || p.PR == 0 || pull["state"] != "open" || pull["merged"] != false || pull["head"] != in.Head || str(facts["remote_head"]) != in.Head || pull["base"] != p.RetargetFrom || pull["head_ref"] != p.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) || !shaRE.MatchString(in.PRBase) || pull["base_sha"] != in.PRBase {
+			return result, errors.New("retarget requires the exact rebuilt and published PR, captured old target and observed PR base")
+		}
+		return GitHubActionCheck{GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: targetBranch, EditableFields: []string{"base"}, Verification: "Only change this PR's base to target_branch after re-reading its head, old base and PR base SHA. Verify the remote result, refresh CI and require independent review of the new tested head AND target. This check performs no write and grants no merge or publication permission."}, nil
 	case "merge":
-		if p.PR == 0 || pull["state"] != "open" || pull["draft"] != false || pull["merged"] != false || pull["head"] != in.Head || str(facts["remote_head"]) != in.Head || pull["head_ref"] != p.Branch || pull["base"] != f.Target.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
-			return result, errors.New("merge requires the current tested open non-draft sync PR")
+		if p.Queue != nil {
+			if p.BatchID != queueHead(*p) || targetBranch != f.Target.Branch || p.ParentBatch != "" {
+				return result, errors.New("only the first unfinished batch rebuilt onto the integration branch may merge")
+			}
+			if queueRemoteFailure(snapshot.Objects) {
+				return result, errors.New("current CI failed; resolve it before merging")
+			}
+		}
+		if p.PR == 0 || pull["state"] != "open" || pull["draft"] != false || pull["merged"] != false || pull["head"] != in.Head || str(facts["remote_head"]) != in.Head || pull["base"] != f.Target.Branch || pull["head_ref"] != p.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
+			return result, errors.New("merge requires the current tested open non-draft sync PR on the integration branch")
 		}
 		if pull["base_sha"] != prBase {
 			return result, errors.New("PR base revision differs; refresh context and pass the observed PR base as pr_base while keeping base at the current tested target")
@@ -138,14 +163,14 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 	if p.SyncMode == adaptedBatches {
 		mergeMethod = "squash"
 	}
-	return GitHubActionCheck{ExpectedRemoteHead: replacementHead, GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: f.Target.Branch, Verification: "Current owner, delegation, branch and revisions checked. Only normal fast-forward pushes are permitted unless expected_remote_head is returned under an exact operator replacement grant; then use --force-with-lease=refs/heads/<branch>:<expected_remote_head>, never an unconditional force push; merge this PR using " + mergeMethod + " and expected head, without bypassing repository rules. For merge, base is the live tested target; pr_base, if supplied, is the separately checked PR-recorded base. Recheck if either changes; completion still verifies the merge parents and tree against the test proof. Inspect current CI and reviews. This check performs no GitHub write."}, nil
+	return GitHubActionCheck{ExpectedRemoteHead: replacementHead, GitHubActionInput: in, Repository: f.Target.Repo, Number: p.PR, Permitted: true, Branch: p.Branch, TargetBranch: targetBranch, Verification: "Current owner, delegation, branch and revisions checked. Only normal fast-forward pushes are permitted unless expected_remote_head is returned under an exact operator replacement grant or captured queue rebuild lease; then use --force-with-lease=refs/heads/<branch>:<expected_remote_head>, never an unconditional force push; merge this PR using " + mergeMethod + " and expected head, without bypassing repository rules. For merge, base is the live tested target; pr_base, if supplied, is the separately checked PR-recorded base. Recheck if either changes; completion still verifies the merge parents and tree against the test proof. Inspect current CI and reviews. This check performs no GitHub write."}, nil
 }
 
 func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkResult) error {
 	if err := requireForkContext(w, in.WorkInput); err != nil {
 		return err
 	}
-	p := *w.Fork
+	p := cloneForkProgress(*w.Fork)
 	if p.Phase == "synced" {
 		if in.Outcome != "merged" || p.LastSuccess != p.Upstream || p.SyncMode != w.Guide.ForkSyncMode {
 			return ErrWorkDenied
@@ -153,7 +178,7 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 		if err := s.verifyCompletedForkEvidence(ctx, w, in.WorkInput); err != nil {
 			return err
 		}
-	} else if in.Outcome == "merged" || in.Outcome == "changes-ready" {
+	} else if in.Outcome == "merged" || in.Outcome == "changes-ready" || in.ReviewOnly {
 		if err := requireForkWork(w, in.WorkInput); err != nil {
 			return err
 		}
@@ -163,7 +188,7 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 	}
 	var snapshot Snapshot
 	_ = json.Unmarshal(w.Snapshot, &snapshot)
-	if p.SyncMode == adaptedBatches && (in.Outcome == "merged" || in.Outcome == "changes-ready") {
+	if p.SyncMode == adaptedBatches && (in.Outcome == "merged" || in.Outcome == "changes-ready" || in.ReviewOnly) {
 		// Already completed historical rounds keep their original proof. No
 		// unfinished round may use that exception to bypass the new contract.
 		historical := p.Phase == "synced" && p.ValidatedMapping == "" && p.ValidatedPRSection == ""
@@ -176,11 +201,24 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 			}
 		}
 	}
-	switch in.Outcome {
+	effectiveOutcome := in.Outcome
+	if in.ReviewOnly {
+		effectiveOutcome = "changes-ready"
+	}
+	switch effectiveOutcome {
 	case "merged":
 		pull, facts := snapshot.Objects["pull"], forkFacts(w)
 		if pull["merged"] != true || !validForkProofHead(p) || !shaRE.MatchString(p.ValidatedTree) || pull["head"] != p.ValidatedHead || !s.forkCompletionGuideMatches(w) || (p.SyncMode != adaptedBatches && (facts["contains_pinned"] != true || facts["contains_validated"] != true)) || facts["merge_verified"] != true {
 			return errors.New("sync completion requires the tested head and merge tree in the remote target, plus refreshed merged PR evidence")
+		}
+		if p.Queue != nil && p.Phase != "synced" {
+			f, _ := s.Config.Fork(w.Event.Key)
+			if queueHead(p) != p.BatchID || p.ParentBatch != "" || p.TargetBranch != f.Target.Branch || pull["base"] != f.Target.Branch {
+				return errors.New("completion must be the queue head merged into the integration branch")
+			}
+			p.Queue.MergedThrough = p.Upstream
+			p.Queue.MergedTarget = str(facts["merge_commit_sha"])
+			p.MergedAt = time.Now().Unix()
 		}
 		p.LastSuccess, p.Phase, p.NextAttempt = p.Upstream, "synced", 0
 	case "changes-ready":
@@ -189,6 +227,19 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 		}
 		if p.SyncMode == adaptedBatches && (p.PR == 0 || snapshot.Objects["pull"]["head"] != p.ValidatedHead || snapshot.Objects["pull"]["state"] != "open") {
 			return errors.New("adapted changes-ready requires the tested head on the current open PR")
+		}
+		if p.Queue != nil {
+			if snapshot.Objects["pull"]["base"] != p.TargetBranch || queueRemoteFailure(snapshot.Objects) {
+				return errors.New("review-ready requires the intended PR base and no failed checks")
+			}
+			if p.ReadyAt == 0 {
+				p.ReadyAt = time.Now().Unix()
+			}
+			// Prepared is a source frontier, not an assertion that stale older
+			// generations remain valid, and never advances merged progress.
+			if queueIndex(p, p.BatchID) == len(p.Queue.Batches)-1 {
+				p.Queue.PreparedThrough = p.Upstream
+			}
 		}
 		p.Phase, p.NextAttempt = "awaiting-review", 0
 	case "waiting":
@@ -275,6 +326,9 @@ func (s *Service) RestartFork(ctx context.Context, in WorkInput) (ForkProgress, 
 		return ForkProgress{}, errors.New("restart requires a closed unmerged PR or explicit retirement of a merged legacy integration head already containing pinned upstream")
 	}
 	p := *w.Fork
+	if p.Queue != nil {
+		return p, errors.New("use select-sync-batch and rebuild-sync-batch to retry the same queued source range")
+	}
 	p.Phase, p.NextAttempt = "restart", 0
 	err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil)
 	return p, err

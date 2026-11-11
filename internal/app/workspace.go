@@ -13,16 +13,19 @@ import (
 
 type Workspace struct {
 	WorkInput
-	Resource     string     `json:"resource_key"`
-	Repository   string     `json:"repository"`
-	Path         string     `json:"path"`
-	Branch       string     `json:"branch"`
-	Head         string     `json:"head"`
-	Base         string     `json:"base"`
-	Conflicts    []string   `json:"conflicts"`
-	TestCommands [][]string `json:"test_commands"`
-	Verification string     `json:"verification"`
-	MappingFile  string     `json:"mapping_file,omitempty"`
+	Resource          string     `json:"resource_key"`
+	Repository        string     `json:"repository"`
+	Path              string     `json:"path"`
+	Branch            string     `json:"branch"`
+	Head              string     `json:"head"`
+	Base              string     `json:"base"`
+	Conflicts         []string   `json:"conflicts"`
+	TestCommands      [][]string `json:"test_commands"`
+	Verification      string     `json:"verification"`
+	LocalBranch       string     `json:"local_branch,omitempty"`
+	RebuildSourceHead string     `json:"rebuild_source_head,omitempty"`
+	RebuildFromBase   string     `json:"rebuild_from_base,omitempty"`
+	MappingFile       string     `json:"mapping_file,omitempty"`
 }
 
 func gitLocal(ctx context.Context, directory string, args ...string) (string, error) {
