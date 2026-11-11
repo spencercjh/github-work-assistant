@@ -78,8 +78,15 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 	if o.Upstream, err = g.branchHead(ctx, f.Upstream); err != nil {
 		return o, err
 	}
-	if o.Target, err = g.branchHead(ctx, f.Target); err != nil {
+	targetRef := BranchRef{Repo: f.Target.Repo, Branch: forkTargetBranch(f, p)}
+	if o.Target, err = g.branchHead(ctx, targetRef); err != nil {
 		return o, err
+	}
+	o.IntegrationTarget = o.Target
+	if targetRef.Branch != f.Target.Branch {
+		if o.IntegrationTarget, err = g.branchHead(ctx, f.Target); err != nil {
+			return o, err
+		}
 	}
 	contains := func(ancestor, head string) (bool, error) {
 		return g.containsCommit(ctx, f.Target.Repo, ancestor, head)
@@ -91,7 +98,7 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 			return o, err
 		}
 		defer local.close()
-		for _, revision := range []struct{ repo, sha string }{{f.Upstream.Repo, o.Upstream}, {f.Target.Repo, o.Target}, {f.Upstream.Repo, p.Upstream}} {
+		for _, revision := range []struct{ repo, sha string }{{f.Upstream.Repo, o.Upstream}, {f.Target.Repo, o.Target}, {f.Target.Repo, o.IntegrationTarget}, {f.Upstream.Repo, p.Upstream}} {
 			if err = local.ensureCommit(ctx, revision.repo, revision.sha); err != nil {
 				return o, err
 			}
@@ -123,7 +130,10 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 				}
 			}
 		}
-		q := url.Values{"state": {"all"}, "head": {strings.Split(f.Target.Repo, "/")[0] + ":" + p.Branch}, "base": {f.Target.Branch}, "per_page": {"100"}}
+		q := url.Values{"state": {"all"}, "head": {strings.Split(f.Target.Repo, "/")[0] + ":" + p.Branch}, "base": {targetRef.Branch}, "per_page": {"100"}}
+		if p.BatchID != "" {
+			q.Del("base")
+		} // Find manual retargets and lost-create responses by immutable head branch.
 		rows, err := g.pages(ctx, "repos/"+f.Target.Repo+"/pulls?"+q.Encode(), "")
 		if err != nil {
 			return o, err
@@ -149,7 +159,7 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 				return o, errors.New("invalid sync PR snapshot")
 			}
 			pull := snap.Objects["pull"]
-			if pull["head_ref"] != p.Branch || pull["base"] != f.Target.Branch || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
+			if pull["head_ref"] != p.Branch || (p.BatchID == "" && pull["base"] != targetRef.Branch) || !strings.EqualFold(str(pull["head_repo"]), f.Target.Repo) {
 				return o, errors.New("PR does not match the configured sync branch and target")
 			}
 			o.Objects = snap.Objects
@@ -160,7 +170,7 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 	// Verify the actual merge against the tested target, upstream and tree only
 	// after the corresponding PR was actually merged.
 	pull := o.Objects["pull"]
-	if pull["merged"] == true && validForkProofHead(p) && shaRE.MatchString(p.ValidatedTree) && pull["head"] == p.ValidatedHead {
+	if pull["merged"] == true && pull["base"] == f.Target.Branch && targetRef.Branch == f.Target.Branch && validForkProofHead(p) && shaRE.MatchString(p.ValidatedTree) && pull["head"] == p.ValidatedHead {
 		o.MergeCommit = str(pull["merge_commit_sha"])
 		if !shaRE.MatchString(o.MergeCommit) {
 			return o, errors.New("merged PR has no valid merge commit")
@@ -213,11 +223,18 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 	}
 	// Pin all fetched facts to one target revision; CI/reviews are already
 	// protected against moving PR heads by the ordinary PR collector.
-	if target, err := g.branchHead(ctx, f.Target); err != nil || target != o.Target {
+	if target, err := g.branchHead(ctx, targetRef); err != nil || target != o.Target {
 		if err != nil {
 			return o, err
 		}
 		return o, fmt.Errorf("fork target changed during collection; retry")
+	}
+	if targetRef.Branch != f.Target.Branch {
+		if target, err := g.branchHead(ctx, f.Target); err != nil {
+			return o, err
+		} else if target != o.IntegrationTarget {
+			return o, errors.New("integration branch changed during collection; retry")
+		}
 	}
 	return o, nil
 }

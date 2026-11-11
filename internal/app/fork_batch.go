@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -80,6 +81,9 @@ func (s *Service) StartForkBatch(ctx context.Context, in ForkBatchInput) (ForkPr
 	f, ok := s.Config.Fork(w.Event.Key)
 	if !ok || w.Fork == nil || w.Guide.ForkSyncMode != adaptedBatches || w.Guide.Mode != "local-edit" || f.LocalRepository == "" || w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
 		return ForkProgress{}, ErrWorkDenied
+	}
+	if f.Queue != nil {
+		return s.startQueuedForkBatch(ctx, in, w, f)
 	}
 	p := *w.Fork
 	var snapshot Snapshot
@@ -168,10 +172,44 @@ func (s *Store) StartForkBatch(ctx context.Context, f ForkSpec, expected, next F
 	if err = tx.QueryRowContext(ctx, `SELECT version_hash FROM ghraft_snapshots WHERE resource_key=?`, f.Key()).Scan(&current); err != nil {
 		return err
 	}
-	if p.Revision != expected.Revision || p.Round != expected.Round || p.SpecVersion != next.SpecVersion || version != current {
+	if p.Revision != expected.Revision || p.Round != expected.Round || p.SpecVersion != next.SpecVersion || (version != "" && version != current) {
 		return ErrStaleWork
 	}
-	next.Revision = p.Revision + 1
+	if p.Queue != nil {
+		for _, b := range p.Queue.Batches {
+			i := queueIndex(next, b.Progress.BatchID)
+			if i >= 0 && next.Queue.Batches[i].Progress.Round == b.Progress.Round {
+				continue
+			}
+			// Archive retired generations only, atomically with replacement.
+			if err = tx.Upsert(ctx, &metaRecord{queueArchiveName(f.Key(), b.Progress.Round), string(queueArchive(b))}, []string{"name"}, []string{"value"}); err != nil {
+				return err
+			}
+		}
+	}
+	if next.Queue != nil {
+		if i := queueIndex(next, next.BatchID); i >= 0 {
+			next.Queue.Batches[i].Observation = o
+		}
+		syncQueueProjection(&next)
+		for _, b := range next.Queue.Batches {
+			if b.Observation.PR > 0 {
+				if err = associateForkPR(ctx, tx, f, b.Observation.PR); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	// Collector refreshes must not create semantic revisions on every poll or
+	// overwrite a newer lease heartbeat.
+	if p.Validation != nil && next.Validation != nil && p.Validation.ID == next.Validation.ID && p.Validation.HeartbeatAt > next.Validation.HeartbeatAt {
+		next.Validation.HeartbeatAt = p.Validation.HeartbeatAt
+	}
+	syncQueueProjection(&next)
+	next.Revision = p.Revision
+	if !reflect.DeepEqual(p, next) {
+		next.Revision++
+	}
 	if err = writeForkProgress(ctx, tx, f.Key(), next); err != nil {
 		return err
 	}

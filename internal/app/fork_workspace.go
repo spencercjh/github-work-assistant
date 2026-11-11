@@ -32,6 +32,13 @@ func (s *Service) forkWorkspacePaths(round string) (string, string, error) {
 	return s.workspacePaths(hash([]byte(round + ":upstream-only")))
 }
 
+func forkLocalBranch(p *ForkProgress) string {
+	if p.RebuildFromBase != "" {
+		return p.Branch + "-generation-" + p.Round[:12]
+	}
+	return p.Branch
+}
+
 func forkSourceBase(p *ForkProgress) string {
 	if p.SyncMode == adaptedBatches {
 		return p.InitialTarget
@@ -70,7 +77,7 @@ func (s *Service) prepareForkWorkspace(ctx context.Context, w WorkContext, in Wo
 			return Workspace{}, errors.New("fetch the pinned upstream and current target commits into the local clone first")
 		}
 	}
-	workspace := Workspace{WorkInput: in, Resource: w.Event.Key, Repository: repository, Path: path, Branch: p.Branch, Head: forkSourceBase(p), Base: p.InitialTarget, TestCommands: w.Guide.TestCommands}
+	workspace := Workspace{WorkInput: in, Resource: w.Event.Key, Repository: repository, Path: path, Branch: p.Branch, LocalBranch: forkLocalBranch(p), RebuildSourceHead: p.RebuildSourceHead, RebuildFromBase: p.RebuildFromBase, Head: forkSourceBase(p), Base: p.InitialTarget, TestCommands: w.Guide.TestCommands}
 	if b, err := os.ReadFile(metadata); err == nil {
 		var saved Workspace
 		if json.Unmarshal(b, &saved) != nil || saved.Repository != repository || saved.Resource != w.Event.Key || saved.Path != path || saved.Branch != p.Branch || saved.Head != forkSourceBase(p) || saved.Base != p.InitialTarget {
@@ -98,7 +105,7 @@ func (s *Service) prepareForkWorkspace(ctx context.Context, w WorkContext, in Wo
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		args := []string{"worktree", "add", "--detach", path, p.Upstream}
 		if p.SyncMode == adaptedBatches {
-			args = []string{"worktree", "add", "-b", p.Branch, path, p.InitialTarget}
+			args = []string{"worktree", "add", "-b", forkLocalBranch(p), path, p.InitialTarget}
 		}
 		if _, err = gitLocal(ctx, repository, args...); err != nil {
 			return Workspace{}, err
@@ -143,7 +150,7 @@ func (s *Service) verifyForkWorkspace(ctx context.Context, w WorkContext, in Wor
 	branch, err := gitLocal(ctx, path, "branch", "--show-current")
 	wantBranch := ""
 	if p.SyncMode == adaptedBatches {
-		wantBranch = p.Branch
+		wantBranch = forkLocalBranch(p)
 	}
 	if err != nil || branch != wantBranch {
 		return workspace, errors.New("source worktree branch differs from the sync round")
@@ -452,6 +459,13 @@ func forkTestEvidenceMatches(tested, current []byte) bool {
 	newWake, newOK := after.Objects["fork"]["wake"].(float64)
 	if !oldOK || !newOK || oldWake < 0 || newWake < oldWake {
 		return false
+	}
+	// Validation itself changes the selected batch phase. Remote/dependency
+	// evidence remains compared in full, including every predecessor.
+	if id := str(before.Objects["fork"]["batch_id"]); id != "" {
+		for _, snap := range []*Snapshot{&before, &after} {
+			delete(snap.Objects["queue:"+id], "phase")
+		}
 	}
 	delete(before.Objects["fork"], "wake")
 	delete(after.Objects["fork"], "wake")

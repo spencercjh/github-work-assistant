@@ -449,6 +449,8 @@ work-context.fork 非空时，先读取本轮 upstream_sha、initial_target_sha�
 
 上述源工作区规则适用于默认原样同步。guide.fork_sync_mode 为 adapted-batches 时，先记录历史起点依据，再用 start-sync-batch --after <首次起点SHA> --count 1 --reason-file <批次说明文件> 选择最早的下一批主线变更。读取新事件并关联后，prepare-worktree 创建基于目标的独立分支，允许按 batch_commits 移植并提交适配。test-worktree 绑定实际适配 HEAD、当前目标和合并树；源提交变化也须重测。初始起点不是历史同步成功证明；逐项说明移植或已存在的依据，并保留商业行为。核验人工或获准合入后才能推进成功位置；后续 start-sync-batch 省略 --after，从已核验位置继续。不能跳过未完成批次，也不能静默替换已发布的 PR。此模式不增加 GitHub 权限，详见 docs/FORK-MAINTENANCE.md。
 
+当可信规则启用 queue 时，上述串行选择规则改为按 fork.queue 的批次记录执行。只等待审阅且通过验证的批次允许继续 start-sync-batch，直到达到 max_open_prs；人工合并选择可用 needs-decision --review-only 报告，仍需全部 changes-ready 条件。冲突、正确性问题和失败验证不能标为 review-only。select-sync-batch --batch <batch_id> 切换当前批次，随后刷新并关联新证据。仅队首可实际合入正式集成分支，不得把后序 PR 合入前序同步分支。前序或正式目标变化后，按顺序 rebuild-sync-batch；在新工作区重放同一来源范围、重新签名、填写映射和完整验证。检查返回准确 expected_remote_head 才可显式 lease 替换；独立授权的 retarget-pr 只切换返回的目标。更换 head 或目标后重做独立审阅，不沿用旧批准。关闭的批次明确重建原范围，不使用 restart-sync 跳过。参见 docs/FORK-QUEUE.md。
+
 适配模式必须严格逐提交对应：每条本地移植提交只对应一条上游提交，按 batch_commits 顺序形成线性提交链，提交尾注恰好包含一条 Upstream-Commit: <完整上游SHA>。不得合并多条来源到一个提交、添加无关提交或为跳过项创建空提交。可以把多条独立移植提交放在同一 PR，集中跑整批验证。填写 prepare-worktree 返回的外部 mapping_file：每项保留 upstream，status 使用 ported/already-present/not-applicable，逐项填写 reason；只有 ported 填 commit。清单文件不加入源分支。
 
 test-worktree 会核对来源清单、提交顺序和尾注；成功返回 pr_body_file。把生成的完整来源表放入 PR 正文，保留其中每条上游链接、移植提交、跳过理由和标记。创建或编辑适配 PR 前，check-github-action 另传 --body-file <实际完整正文>；发布后核对远端正文。清单变化必须重测，已有已完成轮次的历史证明保留。除非用户明确授权其他状态，创建草稿 PR。检查只验证来源声明和 Git 对应关系，测试和人工审阅仍需核实语义。关闭后明确重试时，restart-sync 后再 start-sync-batch，保留原起点、旧工作区及报告。
