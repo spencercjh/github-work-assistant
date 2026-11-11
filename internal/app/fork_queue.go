@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -105,13 +106,47 @@ func queueValidationRunning(p ForkProgress) bool {
 }
 
 func queueRemoteFailure(objects Objects) bool {
-	for key, row := range objects {
-		if strings.HasPrefix(key, "check:") || strings.HasPrefix(key, "status:") {
-			for _, name := range []string{"conclusion", "status", "state"} {
-				if slices.Contains([]string{"failure", "error", "cancelled", "timed_out", "action_required", "startup_failure", "stale"}, str(row[name])) {
-					return true
-				}
+	failed := func(row map[string]any) bool {
+		for _, name := range []string{"conclusion", "status", "state"} {
+			if slices.Contains([]string{"failure", "error", "cancelled", "timed_out", "action_required", "startup_failure", "stale"}, str(row[name])) {
+				return true
 			}
+		}
+		return false
+	}
+	type status struct {
+		created time.Time
+		id      uint64
+		row     map[string]any
+	}
+	latest := map[string]status{}
+	for key, row := range objects {
+		if strings.HasPrefix(key, "check:") && failed(row) {
+			return true
+		}
+		if !strings.HasPrefix(key, "status:") {
+			continue
+		}
+		// The statuses API returns history. Snapshots retain it for audit, but
+		// readiness follows only the newest status per context. Numeric IDs break
+		// ties when multiple updates arrive within the same timestamp second.
+		context := strings.ToLower(str(row["context"]))
+		created, timeErr := time.Parse(time.RFC3339, str(row["created_at"]))
+		id, idErr := strconv.ParseUint(strings.TrimPrefix(key, "status:"), 10, 64)
+		if context == "" || timeErr != nil || idErr != nil {
+			if failed(row) {
+				return true // Unorderable evidence cannot conceal a failure.
+			}
+			continue
+		}
+		old, exists := latest[context]
+		if !exists || created.After(old.created) || (created.Equal(old.created) && id > old.id) {
+			latest[context] = status{created, id, row}
+		}
+	}
+	for _, s := range latest {
+		if failed(s.row) {
+			return true
 		}
 	}
 	return false
@@ -182,10 +217,15 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 	for i := range next.Queue.Batches {
 		b := &next.Queue.Batches[i]
 		requested := b.Progress
-		// A merged/closed predecessor may have had its branch deleted. Observe the
-		// real integration target while retaining the child's old declared base.
-		if i > 0 && requested.ParentBatch != "" && (next.Queue.Batches[i-1].Progress.Phase == "synced" || next.Queue.Batches[i-1].Observation.Objects["pull"]["state"] == "closed") {
-			requested.TargetBranch = f.Target.Branch
+		// A merged/closed or replaced predecessor may have lost its old branch.
+		// The child's declared target still identifies that retired generation
+		// after the parent is rebuilt. Only observation falls back to integration;
+		// the child remains stale until explicitly rebuilt and retargeted.
+		if i > 0 && requested.ParentBatch != "" {
+			parent := next.Queue.Batches[i-1]
+			if parent.Progress.Phase == "synced" || parent.Observation.Objects["pull"]["state"] == "closed" || requested.TargetBranch != parent.Progress.Branch {
+				requested.TargetBranch = f.Target.Branch
+			}
 		}
 		o, err := source.CollectFork(ctx, f, requested)
 		if err != nil {
@@ -215,7 +255,7 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 				}
 				if parent.Progress.Phase == "synced" {
 					reason = "predecessor merged; rebuild onto integration branch"
-				} else if parent.Progress.QueueStale != "" || parent.Observation.SyncHead != p.ParentHead {
+				} else if parent.Progress.QueueStale != "" || parent.Observation.SyncHead != p.ParentHead || p.TargetBranch != parent.Progress.Branch {
 					reason = "predecessor revision changed"
 				}
 			}
@@ -226,12 +266,15 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 			if pull["merged"] == true && (p.BatchID != queueHead(next) || pull["base"] != f.Target.Branch) {
 				reason = "PR merged outside queue order or integration branch"
 			}
-			// A branch replacement made under this generation's lease is expected.
-			if p.ValidatedHead != "" && o.SyncHead != "" && o.SyncHead != p.ValidatedHead && o.SyncHead != p.RebuildFromHead {
+			// Validation pins the old remote head while preparing its next push.
+			// This only permits the publication gap; force updates still require
+			// the separate exact replacement lease in checkForkAction.
+			if p.ValidatedHead != "" && o.SyncHead != "" && o.SyncHead != p.ValidatedHead && o.SyncHead != p.RebuildFromHead && o.SyncHead != p.PendingPublishFrom {
 				reason = "published head differs from tested head"
 			}
 			if p.ValidatedHead != "" && o.SyncHead == p.ValidatedHead {
 				p.RebuildFromHead = ""
+				p.PendingPublishFrom = ""
 			}
 			if pull != nil && pull["base"] == p.TargetBranch {
 				p.RetargetFrom = ""
@@ -367,6 +410,7 @@ func (s *Service) RebuildForkBatch(ctx context.Context, in ForkQueueInput) (Fork
 	next.InitialTarget, next.TargetBranch, next.ParentBatch, next.ParentHead = target, branch, parentID, parentHead
 	next.IntegrationBase = b.Observation.IntegrationTarget
 	next.RebuildSourceHead, next.RebuildFromHead, next.RebuildFromBase = p.ValidatedHead, b.Observation.SyncHead, p.InitialTarget
+	next.PendingPublishFrom = ""
 	next.RetargetFrom = ""
 	if old := str(b.Observation.Objects["pull"]["base"]); old != "" && old != branch {
 		next.RetargetFrom = old

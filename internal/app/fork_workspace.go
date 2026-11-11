@@ -305,6 +305,9 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	defer cancel()
 	ctx = testCtx
 	p := *w.Fork
+	if p.Queue != nil {
+		p.PendingPublishFrom = str(forkFacts(w)["remote_head"])
+	}
 	p.ValidatedHead, p.ValidatedBase, p.ValidatedTree, p.ValidatedGuide, p.TestLog, p.TestLogHash = "", "", "", "", "", ""
 	p.ValidatedMapping, p.ValidatedPRSection = "", ""
 	now := time.Now()

@@ -144,6 +144,7 @@ type ForkProgress struct {
 	RetargetFrom       string          `json:"retarget_from,omitempty"`
 	RebuildFromHead    string          `json:"rebuild_from_head,omitempty"`
 	RebuildFromBase    string          `json:"rebuild_from_base,omitempty"`
+	PendingPublishFrom string          `json:"pending_publish_from,omitempty"`
 	CreatedAt          int64           `json:"created_at,omitempty"`
 	ReadyAt            int64           `json:"ready_at,omitempty"`
 	MergedAt           int64           `json:"merged_at,omitempty"`

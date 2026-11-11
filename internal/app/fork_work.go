@@ -15,7 +15,7 @@ func requireForkContext(w WorkContext, in WorkInput) error {
 	return nil
 }
 
-func requireForkWork(w WorkContext, in WorkInput) error {
+func requireForkExecution(w WorkContext, in WorkInput) error {
 	if err := requireForkContext(w, in); err != nil {
 		return err
 	}
@@ -27,6 +27,13 @@ func requireForkWork(w WorkContext, in WorkInput) error {
 	}
 	if w.Fork.Queue != nil && w.Guide.ForkQueue == nil {
 		return errors.New("queue policy disabled; restore policy or drain the queue before continuing")
+	}
+	return nil
+}
+
+func requireForkWork(w WorkContext, in WorkInput) error {
+	if err := requireForkExecution(w, in); err != nil {
+		return err
 	}
 	return queueWorkAllowed(*w.Fork, w.Guide.Version)
 }
