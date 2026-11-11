@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -31,6 +33,22 @@ func openForkGitRepository(ctx context.Context, f ForkSpec) (*forkGitRepository,
 	if !filepath.IsAbs(r.directory) {
 		return nil, errors.New("fork local_repository must be absolute")
 	}
+	common, err := r.run(ctx, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || !filepath.IsAbs(common) {
+		return nil, errors.New("cannot resolve fork local_repository metadata")
+	}
+	r.lock, err = forkAncestryLock(ctx, filepath.Join(common, "ghraft-ancestry"))
+	if err != nil {
+		return nil, err
+	}
+	valid := false
+	defer func() {
+		if !valid {
+			r.close()
+		}
+	}()
+	// Metadata can change while waiting. Validate under the acquired lock,
+	// including that the configured path still resolves to the locked clone.
 	remote, err := r.run(ctx, "remote", "get-url", "origin")
 	if err != nil || !githubOriginMatches(remote, f.Target.Repo) {
 		return nil, errors.New("fork local_repository origin does not match the target")
@@ -39,18 +57,60 @@ func openForkGitRepository(ctx context.Context, f ForkSpec) (*forkGitRepository,
 	if err != nil || shallow != "false" {
 		return nil, errors.New("fork ancestry requires a complete, non-shallow clone")
 	}
-	common, err := r.run(ctx, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil || !filepath.IsAbs(common) {
-		return nil, errors.New("cannot resolve fork local_repository metadata")
+	current, err := r.run(ctx, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || current != common {
+		return nil, errors.New("fork local_repository metadata changed while waiting for its lock")
+	}
+	locked, lockErr := r.lock.Stat()
+	currentLock, currentErr := os.Stat(filepath.Join(current, "ghraft-ancestry.lock"))
+	if lockErr != nil || currentErr != nil || !os.SameFile(locked, currentLock) {
+		return nil, errors.New("fork local_repository lock changed while waiting")
 	}
 	if _, err = os.Stat(filepath.Join(common, "info", "grafts")); !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.New("fork ancestry cannot use local grafts")
 	}
-	r.lock, err = workspaceLock(filepath.Join(common, "ghraft-ancestry"))
-	if err != nil {
-		return nil, err
-	}
+	valid = true
 	return r, nil
+}
+
+// Ancestry checks share a repository across workspaces and the collector. Wait
+// briefly for local Git work, without changing the fail-fast workspace lock.
+const forkAncestryLockTimeout = 5 * time.Second
+
+func forkAncestryLock(ctx context.Context, metadata string) (*os.File, error) {
+	ctx, cancel := context.WithTimeout(ctx, forkAncestryLockTimeout)
+	defer cancel()
+	f, err := os.OpenFile(metadata+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("open fork ancestry lock: %w", err)
+	}
+	for {
+		if err = ctx.Err(); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("wait for fork ancestry lock: %w", err)
+		}
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			f.Close()
+			return nil, fmt.Errorf("acquire fork ancestry lock: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+func withForkGitRepository(ctx context.Context, f ForkSpec, check func(*forkGitRepository) error) error {
+	repo, err := openForkGitRepository(ctx, f)
+	if err != nil {
+		return err
+	}
+	defer repo.close()
+	return check(repo)
 }
 
 func (r *forkGitRepository) close() { r.lock.Close() }

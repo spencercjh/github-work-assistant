@@ -91,19 +91,26 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 	contains := func(ancestor, head string) (bool, error) {
 		return g.containsCommit(ctx, f.Target.Repo, ancestor, head)
 	}
-	var local *forkGitRepository
 	if f.LocalRepository != "" {
-		local, err = openForkGitRepository(ctx, f)
+		// Keep unrelated GitHub requests outside the shared local Git lock.
+		err = withForkGitRepository(ctx, f, func(local *forkGitRepository) error {
+			for _, revision := range []struct{ repo, sha string }{{f.Upstream.Repo, o.Upstream}, {f.Target.Repo, o.Target}, {f.Target.Repo, o.IntegrationTarget}, {f.Upstream.Repo, p.Upstream}} {
+				if err := local.ensureCommit(ctx, revision.repo, revision.sha); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			return o, err
 		}
-		defer local.close()
-		for _, revision := range []struct{ repo, sha string }{{f.Upstream.Repo, o.Upstream}, {f.Target.Repo, o.Target}, {f.Target.Repo, o.IntegrationTarget}, {f.Upstream.Repo, p.Upstream}} {
-			if err = local.ensureCommit(ctx, revision.repo, revision.sha); err != nil {
-				return o, err
-			}
+		contains = func(ancestor, head string) (yes bool, err error) {
+			err = withForkGitRepository(ctx, f, func(local *forkGitRepository) error {
+				yes, err = local.contains(ctx, ancestor, head)
+				return err
+			})
+			return yes, err
 		}
-		contains = func(ancestor, head string) (bool, error) { return local.contains(ctx, ancestor, head) }
 	}
 	if o.ContainsLatest, err = contains(o.Upstream, o.Target); err != nil {
 		return o, err
@@ -175,11 +182,14 @@ func (g GH) CollectFork(ctx context.Context, f ForkSpec, p ForkProgress) (ForkOb
 		if !shaRE.MatchString(o.MergeCommit) {
 			return o, errors.New("merged PR has no valid merge commit")
 		}
-		if local != nil {
-			if err = local.ensureCommit(ctx, f.Target.Repo, o.MergeCommit); err != nil {
-				return o, err
-			}
-			if err = local.ensureCommit(ctx, f.Target.Repo, p.ValidatedHead); err != nil {
+		if f.LocalRepository != "" {
+			err = withForkGitRepository(ctx, f, func(local *forkGitRepository) error {
+				if err := local.ensureCommit(ctx, f.Target.Repo, o.MergeCommit); err != nil {
+					return err
+				}
+				return local.ensureCommit(ctx, f.Target.Repo, p.ValidatedHead)
+			})
+			if err != nil {
 				return o, err
 			}
 		}
