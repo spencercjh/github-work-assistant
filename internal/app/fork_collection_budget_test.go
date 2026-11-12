@@ -2,12 +2,80 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestCompletedQueueRefreshesRepositoryPrivacy(t *testing.T) {
+	for _, unfinished := range []bool{false, true} {
+		name := "all-completed"
+		if unfinished {
+			name = "selected-completed-with-unfinished-successor"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, q, _, after := newQueueFixture(t)
+			appendQueue(t, s, after)
+			a := publishQueue(t, s, q)
+			if unfinished {
+				appendQueue(t, s, "")
+				publishQueue(t, s, q)
+			}
+			done := mergeQueue(t, s, q, a.BatchID)
+			s.Config.PrivateRepositories = []string{"example/fixture"}
+			s.Config.Discover = false
+			if unfinished {
+				q.private = true
+			} else {
+				// Exercise real metadata parsing, with no historical PR fixtures.
+				g, path := fakeGH(t, q.upstream, q.target)
+				g.PrivateRepositories = s.Config.PrivateRepositories
+				ref := func(sha string) any {
+					return map[string]any{"ref": "refs/heads/main", "object": map[string]any{"sha": sha, "type": "commit"}}
+				}
+				writeFixture(t, path, map[string]any{
+					"user":                  map[string]any{"login": g.Login},
+					"repos/source/fixture":  map[string]any{"full_name": "source/fixture", "private": false},
+					"repos/example/fixture": map[string]any{"full_name": "example/fixture", "private": true},
+					"repos/source/fixture/git/ref/heads/main":  ref(q.upstream),
+					"repos/example/fixture/git/ref/heads/main": ref(q.target),
+				})
+				s.GH = g
+			}
+			if err := s.Collect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.Store.ForkProgress(t.Context(), s.Config.Forks[0].Key())
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _, err := s.Store.Snapshot(t.Context(), s.Config.Forks[0].Key())
+			var snap Snapshot
+			if err != nil || json.Unmarshal(raw, &snap) != nil {
+				t.Fatal("read refreshed snapshot", err)
+			}
+			if snap.Classification != "private" || !slices.Contains(got.PrivateRepos, "example/fixture") {
+				t.Errorf("new privacy was lost: classification=%q repositories=%v", snap.Classification, got.PrivateRepos)
+			}
+			for _, b := range got.Queue.Batches {
+				if b.Observation.Classification != "private" || !slices.Contains(b.Observation.PrivateRepos, "example/fixture") || !slices.Contains(b.Progress.PrivateRepos, "example/fixture") {
+					t.Errorf("batch %s can restore stale privacy on selection", b.Progress.BatchID)
+				}
+			}
+			if got.TestLogHash != done.TestLogHash || string(canonical(got.Validation)) != string(canonical(done.Validation)) || got.Queue.MergedThrough != done.Queue.MergedThrough || got.Queue.MergedTarget != done.Queue.MergedTarget {
+				t.Fatal("privacy refresh rewrote accepted proof or frontier")
+			}
+			protected, err := s.Store.Meta(t.Context(), "private-watch:"+s.Config.Forks[0].Key(), "false")
+			if err != nil || protected != "true" {
+				t.Fatal("historical events were not protected", protected, err)
+			}
+		})
+	}
+}
 
 type countedQueueSource struct {
 	*queueSource

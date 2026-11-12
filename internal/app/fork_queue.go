@@ -214,6 +214,17 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 	next := cloneForkProgress(expected)
 	syncQueueProjection(&next)
 	var integration, upstream string
+	var privacy ForkObservation
+	observePrivacy := func(o ForkObservation) {
+		if o.Classification == "private" {
+			privacy.Classification = "private"
+		}
+		for _, repo := range o.PrivateRepos {
+			if !slices.Contains(privacy.PrivateRepos, repo) {
+				privacy.PrivateRepos = append(privacy.PrivateRepos, repo)
+			}
+		}
+	}
 	for i := range next.Queue.Batches {
 		b := &next.Queue.Batches[i]
 		// Completion was accepted only after exact merge/proof verification.
@@ -237,6 +248,7 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		if err != nil {
 			return err
 		}
+		observePrivacy(o)
 		main := o.IntegrationTarget
 		if main == "" {
 			main = o.Target
@@ -299,9 +311,27 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		if err != nil {
 			return err
 		}
+		observePrivacy(o)
 		integration, upstream = o.IntegrationTarget, o.Upstream
 		if integration == "" {
 			integration = o.Target
+		}
+	}
+	// Repository visibility is live even when PR evidence is historical. Copy
+	// restrictions to every batch so selecting an accepted batch cannot restore
+	// public classification or lose a private repository's access requirement.
+	for i := range next.Queue.Batches {
+		b := &next.Queue.Batches[i]
+		for _, repo := range privacy.PrivateRepos {
+			if !slices.Contains(b.Progress.PrivateRepos, repo) {
+				b.Progress.PrivateRepos = append(b.Progress.PrivateRepos, repo)
+			}
+			if !slices.Contains(b.Observation.PrivateRepos, repo) {
+				b.Observation.PrivateRepos = append(b.Observation.PrivateRepos, repo)
+			}
+		}
+		if privacy.Classification == "private" || len(b.Progress.PrivateRepos) > 0 {
+			b.Observation.Classification = "private"
 		}
 	}
 	// The source cursor is valid only while its last accepted merge remains in

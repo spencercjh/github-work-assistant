@@ -162,17 +162,17 @@ assert a[:5]==['api','--hostname','github.com','--method','GET'], 'non-GET rejec
 p=a[5]
 if p=='user':
     if a[6:]==['--jq','.login']: print('fixture-user'); sys.exit(0)
-    assert not a[6:]
+    assert a[6:]==['--include']
     data={'login':'fixture-user'}
 elif p.startswith('notifications?'):
-    assert a[6:]==['--paginate','--slurp'] and 'per_page=50' in p
+    assert a[6:]==['--paginate','--include'] and 'per_page=50' in p
     # Notification versions represent fixture events, not wall-clock seconds.
     root=Path(__file__).resolve().parents[1]
     revision=sum(weight for name,weight in [('updated',1),('closed',2),('metadata',4),('reopened',8)] if (root/name).exists())
     stamp=datetime.datetime(2026,1,1,tzinfo=datetime.timezone.utc)+datetime.timedelta(seconds=revision)
-    data=[[{'updated_at':stamp.strftime('%Y-%m-%dT%H:%M:%SZ'),
+    data=[{'updated_at':stamp.strftime('%Y-%m-%dT%H:%M:%SZ'),
             'subject':{'type':'Issue','url':'https://api.github.com/repos/example/fixture/issues/1'},
-            'repository':{'private':False}}]]
+            'repository':{'private':False}}]
 elif p=='repos/example/fixture': data={'full_name':'example/fixture','private':False}
 elif p=='repos/example/fixture/issues/1':
     data={'id':1,'number':1,'title':'fixture external prose @fixture-human','state':'open','body':'fixture issue body'}
@@ -180,9 +180,11 @@ elif p=='repos/example/fixture/issues/1':
     if (Path(__file__).resolve().parents[1]/'closed').exists(): data['state'] = 'closed'
     if (Path(__file__).resolve().parents[1]/'metadata').exists(): data['title'] += ' metadata'
 elif p in ('repos/example/fixture/issues/1/comments?per_page=100','repos/example/fixture/issues/1/timeline?per_page=100'):
-    assert a[6:]==['--paginate','--slurp']
-    data=[[]]
+    assert a[6:]==['--paginate','--include']
+    data=[]
 else: sys.exit('unexpected fixture endpoint')
+assert '--include' in a
+print('HTTP/2.0 200 OK\\nContent-Type: application/json\\n')
 print(json.dumps(data))
 ''')
         gh.chmod(0o700)
