@@ -262,6 +262,12 @@ func (d WorkDefinition) Collect(ctx context.Context, s *Service) error {
 }
 
 func (s *Service) collectFork(ctx context.Context, spec ForkSpec) error {
+	return s.coordinateForkCollection(ctx, spec, func(ctx context.Context) error {
+		return s.collectForkNow(ctx, spec)
+	})
+}
+
+func (s *Service) collectForkNow(ctx context.Context, spec ForkSpec) error {
 	g, ok := s.GH.(ForkSource)
 	if !ok {
 		return errors.New("GitHub source does not support branch maintenance")

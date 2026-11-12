@@ -214,8 +214,25 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 	next := cloneForkProgress(expected)
 	syncQueueProjection(&next)
 	var integration, upstream string
+	var privacy ForkObservation
+	observePrivacy := func(o ForkObservation) {
+		if o.Classification == "private" {
+			privacy.Classification = "private"
+		}
+		for _, repo := range o.PrivateRepos {
+			if !slices.Contains(privacy.PrivateRepos, repo) {
+				privacy.PrivateRepos = append(privacy.PrivateRepos, repo)
+			}
+		}
+	}
 	for i := range next.Queue.Batches {
 		b := &next.Queue.Batches[i]
+		// Completion was accepted only after exact merge/proof verification.
+		// Keep that PR's evidence, rather than polling its comments and CI forever.
+		// The live integration frontier is still checked below on every refresh.
+		if completedQueueBatch(*b) {
+			continue
+		}
 		requested := b.Progress
 		// A merged/closed or replaced predecessor may have lost its old branch.
 		// The child's declared target still identifies that retired generation
@@ -231,6 +248,7 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		if err != nil {
 			return err
 		}
+		observePrivacy(o)
 		main := o.IntegrationTarget
 		if main == "" {
 			main = o.Target
@@ -286,6 +304,36 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		}
 		b.Progress, b.Observation = unqueuedProgress(p), o
 	}
+	if integration == "" {
+		// An entirely completed queue still discovers upstream/main changes and
+		// checks repository access, without rediscovering any historical PR.
+		o, err := source.CollectFork(ctx, f, ForkProgress{Upstream: next.Upstream})
+		if err != nil {
+			return err
+		}
+		observePrivacy(o)
+		integration, upstream = o.IntegrationTarget, o.Upstream
+		if integration == "" {
+			integration = o.Target
+		}
+	}
+	// Repository visibility is live even when PR evidence is historical. Copy
+	// restrictions to every batch so selecting an accepted batch cannot restore
+	// public classification or lose a private repository's access requirement.
+	for i := range next.Queue.Batches {
+		b := &next.Queue.Batches[i]
+		for _, repo := range privacy.PrivateRepos {
+			if !slices.Contains(b.Progress.PrivateRepos, repo) {
+				b.Progress.PrivateRepos = append(b.Progress.PrivateRepos, repo)
+			}
+			if !slices.Contains(b.Observation.PrivateRepos, repo) {
+				b.Observation.PrivateRepos = append(b.Observation.PrivateRepos, repo)
+			}
+		}
+		if privacy.Classification == "private" || len(b.Progress.PrivateRepos) > 0 {
+			b.Observation.Classification = "private"
+		}
+	}
 	// The source cursor is valid only while its last accepted merge remains in
 	// the integration history, including after its batch leaves the active window.
 	if next.Queue.MergedThrough != "" {
@@ -315,11 +363,25 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		return ErrStaleWork
 	}
 	selected := next.Queue.Batches[i]
+	if completedQueueBatch(selected) {
+		// The selected historical PR remains auditable, while the context used
+		// to prepare its successor reports the live repository revisions.
+		selected.Progress.ObservedUpstream = upstream
+		selected.Observation.IntegrationTarget = integration
+		selected.Observation.Target = integration
+		selected.Observation.Upstream = upstream
+	}
 	q := next.Queue
 	next = selected.Progress
 	next.Queue, next.Revision, next.LastSuccess = q, expected.Revision, q.MergedThrough
 	// One CAS writes every batch, the selected snapshot and its notification.
 	return s.Store.StartForkBatch(ctx, f, expected, next, selected.Observation, "")
+}
+
+func completedQueueBatch(b ForkQueuedBatch) bool {
+	p, o := b.Progress, b.Observation
+	return p.Phase == "synced" && p.MergedAt > 0 &&
+		o.MergeVerified && shaRE.MatchString(o.MergeCommit)
 }
 
 func (s *Service) queueContext(ctx context.Context, in WorkInput) (WorkContext, ForkSpec, error) {

@@ -94,7 +94,7 @@ state/my-assistant/run doctor
 "watches": [{"repo": "your-name/your-repo", "number": 123}]
 ```
 
-自动发现由 `discover_notifications` 控制；关闭时必须保留至少一个固定关注对象或 fork 维护规则。默认 `poll_seconds=120`，最小 60 秒。普通 Issue／PR 的后台轮询按状态处理：
+自动发现由 `discover_notifications` 控制；关闭时必须保留至少一个固定关注对象或 fork 维护规则。默认 `poll_seconds=120`，最小 60 秒；需要降低频率时可设为 `600`（10 分钟），重启服务后生效。每轮结束后等待该间隔，耗时较长的采集不会紧接着补跑。普通 Issue／PR 的后台轮询按状态处理：
 
 | 状态或触发条件 | 查询行为 |
 | --- | --- |
@@ -106,7 +106,11 @@ state/my-assistant/run doctor
 
 已结束事项不保留小时检查或每日核对。如果重开没有产生可读取的个人 Notifications，需要主动执行 `refresh-work-context` 才能发现；关闭自动发现时，同样需要主动刷新。既有快照、未处理事件及工作关联继续保留，停止轮询不等于删除数据或自动忽略待处理事件。
 
-持续 fork 维护规则继续轮询上游分支和同步 PR，不因某个同步 PR 合并而停止。遇到 GitHub 限流时，程序停止本轮剩余采集及投递，保留事件和通知触发记录，下一轮重试。程序尚未根据 GitHub `X-Poll-Interval` 动态调整周期，也未实现 Notifications 条件查询；打开事项较多时仍需结合账号限额增加 `poll_seconds`。
+持续 fork 维护规则继续轮询上游分支和未完成的同步 PR。队列中已核验合入并登记完成的批次保留原证据，不再重复读取其历史评论、评审和 CI；每次仍检查仓库权限、当前分支及已接受合并是否仍在目标历史中。仅在同一数据库、相同配置下实际重叠的 fork 刷新可共享一次成功采集；维护进度变化或采集失败时重新查询，后续独立操作也会重新查询。
+
+遇到 GitHub 限流时，程序停止本轮剩余采集及投递，保留事件和通知触发记录，并按 `Retry-After` 或配额耗尽时的 `X-RateLimit-Reset` 等待。恢复时间按配置账号保存在数据库中，服务和临时 CLI 命令共同遵守；缺少可用恢复时间时从 60 秒开始退避，连续失败最多延长至 15 分钟。后台等待时间不短于 `poll_seconds`，写入前检查遇到限流会返回错误，不能使用旧证据继续写入。
+
+程序尚未根据 GitHub `X-Poll-Interval` 动态调整周期，也未实现 Notifications 条件查询；打开事项较多时仍需结合账号限额增加 `poll_seconds`。
 
 已确认送达且有处理记录的历史正文默认保留 30 天，由 `history_retention_days` 调整。过期后保留去重标识和报告引用；未解决事件、当前快照和任务关联不按此期限删除。可用 `state/assistant/run cleanup --dry-run` 预览，详见[数据保留与清理](STORAGE.md#保存哪些数据)。
 

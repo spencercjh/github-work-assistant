@@ -35,7 +35,7 @@ root=os.path.dirname(__file__)
 a=sys.argv[1:]
 if a[:5]==['api','--hostname','github.com','--method','GET']:
     os.execv(root+'/gh-rest',[root+'/gh-rest']+a)
-if a!=['api','--hostname','github.com','--method','POST','graphql','--input','-']:
+if a!=['api','--hostname','github.com','--method','POST','graphql','--input','-','--include']:
     sys.exit('unexpected gh command')
 b=json.load(sys.stdin)
 with open(root+'/query.txt') as f: expected=f.read()
@@ -48,6 +48,7 @@ p='graphql:'+(v['after'] or 'first')
 with open(os.environ['GHRAFT_REQUEST_LOG'],'a') as f: f.write(p+'\n')
 with open(os.environ['GHRAFT_FIXTURE']) as f: data=json.load(f)
 if p not in data: sys.exit('unconfigured query')
+print('HTTP/2.0 200 OK\nContent-Type: application/json\n')
 if '_raw' in data[p]: print(data[p]['_raw'])
 else: print(json.dumps(data[p]))
 `

@@ -158,8 +158,6 @@ func (s *Service) Deliver(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 func (s *Service) Loop(ctx context.Context) {
-	t := time.NewTicker(time.Duration(s.Config.PollSeconds) * time.Second)
-	defer t.Stop()
 	var nextCleanup time.Time
 	for {
 		c, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -187,10 +185,17 @@ func (s *Service) Loop(ctx context.Context) {
 				nextCleanup = time.Now().Add(time.Hour)
 			}
 		}
+		wait := time.Duration(s.Config.PollSeconds) * time.Second
+		var limited *GitHubRateLimitError
+		if errors.As(collectErr, &limited) {
+			wait = max(wait, time.Until(time.Unix(limited.Until, 0)))
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-t.C:
+		case <-timer.C:
 		}
 	}
 }
