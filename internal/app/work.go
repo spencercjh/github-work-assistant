@@ -129,8 +129,12 @@ func (s *Service) RefreshWorkContext(ctx context.Context, id string) (WorkContex
 	if err != nil {
 		return w, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Fork refreshes coordinate across both HTTP callers and independent CLI
+	// processes. Do not serialize them here before they can join a live refresh.
+	if definition.Fork == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	}
 	if err = s.GH.CheckIdentity(ctx); err != nil {
 		return w, err
 	}

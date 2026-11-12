@@ -216,6 +216,12 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 	var integration, upstream string
 	for i := range next.Queue.Batches {
 		b := &next.Queue.Batches[i]
+		// Completion was accepted only after exact merge/proof verification.
+		// Keep that PR's evidence, rather than polling its comments and CI forever.
+		// The live integration frontier is still checked below on every refresh.
+		if completedQueueBatch(*b) {
+			continue
+		}
 		requested := b.Progress
 		// A merged/closed or replaced predecessor may have lost its old branch.
 		// The child's declared target still identifies that retired generation
@@ -286,6 +292,18 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		}
 		b.Progress, b.Observation = unqueuedProgress(p), o
 	}
+	if integration == "" {
+		// An entirely completed queue still discovers upstream/main changes and
+		// checks repository access, without rediscovering any historical PR.
+		o, err := source.CollectFork(ctx, f, ForkProgress{Upstream: next.Upstream})
+		if err != nil {
+			return err
+		}
+		integration, upstream = o.IntegrationTarget, o.Upstream
+		if integration == "" {
+			integration = o.Target
+		}
+	}
 	// The source cursor is valid only while its last accepted merge remains in
 	// the integration history, including after its batch leaves the active window.
 	if next.Queue.MergedThrough != "" {
@@ -315,11 +333,25 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		return ErrStaleWork
 	}
 	selected := next.Queue.Batches[i]
+	if completedQueueBatch(selected) {
+		// The selected historical PR remains auditable, while the context used
+		// to prepare its successor reports the live repository revisions.
+		selected.Progress.ObservedUpstream = upstream
+		selected.Observation.IntegrationTarget = integration
+		selected.Observation.Target = integration
+		selected.Observation.Upstream = upstream
+	}
 	q := next.Queue
 	next = selected.Progress
 	next.Queue, next.Revision, next.LastSuccess = q, expected.Revision, q.MergedThrough
 	// One CAS writes every batch, the selected snapshot and its notification.
 	return s.Store.StartForkBatch(ctx, f, expected, next, selected.Observation, "")
+}
+
+func completedQueueBatch(b ForkQueuedBatch) bool {
+	p, o := b.Progress, b.Observation
+	return p.Phase == "synced" && p.MergedAt > 0 &&
+		o.MergeVerified && shaRE.MatchString(o.MergeCommit)
 }
 
 func (s *Service) queueContext(ctx context.Context, in WorkInput) (WorkContext, ForkSpec, error) {

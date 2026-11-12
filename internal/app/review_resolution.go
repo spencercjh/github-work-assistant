@@ -66,7 +66,7 @@ func (g GH) ReviewThread(ctx context.Context, repo string, number int, threadID 
 	seen := map[string]bool{}
 	for page := 0; page < 100; page++ {
 		body := canonical(map[string]any{"query": forkReviewThreadQuery, "variables": variables})
-		b, err := githubReadCommand(ctx, []string{"api", "--hostname", "github.com", "--method", "POST", "graphql", "--input", "-"}, bytes.NewReader(body))
+		b, err := g.readCommand(ctx, []string{"api", "--hostname", "github.com", "--method", "POST", "graphql", "--input", "-"}, bytes.NewReader(body))
 		if err != nil {
 			return zeroPR, zeroThread, err
 		}
