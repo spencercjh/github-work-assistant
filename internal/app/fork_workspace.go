@@ -138,11 +138,22 @@ func (s *Service) verifyForkWorkspace(ctx context.Context, w WorkContext, in Wor
 	if json.Unmarshal(data, &workspace) != nil || workspace.Path != path || workspace.Resource != w.Event.Key || workspace.Branch != p.Branch || workspace.Head != forkSourceBase(p) || workspace.Base != p.InitialTarget {
 		return workspace, errors.New("workspace belongs to another sync round")
 	}
+	f, _ := s.Config.Fork(w.Event.Key)
+	var repo *forkGitRepository
+	if p.SyncMode == adaptedBatches {
+		localSpec := f
+		localSpec.LocalRepository = workspace.Repository
+		repo, err = openForkGitRepository(ctx, localSpec)
+		if err != nil {
+			return workspace, err
+		}
+		defer repo.close()
+	}
+	// Read source identity and cleanliness only after any ancestry-lock wait.
 	actual, err := filepath.EvalSymlinks(path)
 	if err != nil || actual != path {
 		return workspace, errors.New("workspace path changed")
 	}
-	f, _ := s.Config.Fork(w.Event.Key)
 	remote, err := gitLocal(ctx, path, "remote", "get-url", "origin")
 	if err != nil || !githubOriginMatches(remote, f.Target.Repo) {
 		return workspace, errors.New("workspace origin changed")
@@ -160,14 +171,7 @@ func (s *Service) verifyForkWorkspace(ctx context.Context, w WorkContext, in Wor
 		return workspace, errors.New("source worktree has no valid commit")
 	}
 	if p.SyncMode == adaptedBatches {
-		localSpec := f
-		localSpec.LocalRepository = workspace.Repository
-		repo, err := openForkGitRepository(ctx, localSpec)
-		if err != nil {
-			return workspace, err
-		}
 		contains, err := repo.contains(ctx, p.InitialTarget, head)
-		repo.close()
 		if err != nil || !contains {
 			return workspace, errors.New("adapted source must retain its initial target history")
 		}
@@ -403,7 +407,11 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	if tree, err := forkTestTree(ctx, testPath, result.Base); err != nil || tree != result.Tree {
 		return result, errors.New("tests changed the merge result")
 	}
-	if source, err := s.verifyForkWorkspace(ctx, w, in); err != nil || source.Head != result.Head {
+	source, err := s.verifyForkWorkspace(ctx, w, in)
+	if err != nil {
+		return result, fmt.Errorf("verify source after tests: %w", err)
+	}
+	if source.Head != result.Head {
 		return result, errors.New("source changed during tests")
 	}
 	if p.SyncMode == adaptedBatches {
