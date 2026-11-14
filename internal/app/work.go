@@ -191,6 +191,9 @@ func (s *Service) checkWork(ctx context.Context, in WorkInput, operation string)
 	if (w.Stale && operation != "register") || in.EvidenceVersion != w.CurrentVersion {
 		return w, ErrStaleWork
 	}
+	if err := s.recordProjectActor(ctx, &w, in, operation); err != nil {
+		return w, err
+	}
 	return w, nil
 }
 

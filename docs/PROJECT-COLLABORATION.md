@@ -107,7 +107,7 @@ work=(--event "$EVENT_ID" --executor "$MY_HANDLE"
 
 支持的结果为 `investigated`、`waiting`、`passed`、`failed`、`approved`、`changes-requested`。`passed`/`failed` 仅供 `test` 工作项使用，`approved`/`changes-requested` 仅供 `review` 使用。助手核对报告确实由当前执行者发在自己的任务讨论区，结果与当时的轮次、head、目标提交、文件树、映射和指引绑定。
 
-`passed` 还须绑定该任务、该执行者实际完成的验证尝试。`approved` 需要当前完整验证证明，且评审者不能是本批同步或协调的执行者。交接或撤销同步任务不会抹除已记录的执行者身份。
+`passed` 还须绑定该任务、该执行者实际完成的验证尝试。`approved` 需要当前完整验证证明，且评审者不能是本批同步或协调的执行者。授予源操作前会保存当前执行者身份；交接后复用旧关联，也不能漏过这项记录。交接、撤销或删除同步任务不会抹除已记录的身份；撤销后的评审核对使用历史记录，不要求该旧任务仍然存在。
 
 `result.current=true` 表示结果仍匹配最新采集状态和保存的完整证明，不是永久授权，也不表示读取了尚未采集的 GitHub 变化或未提交的本地修改。目标、提交、映射、指引或验证尝试变化后，应按最新上下文判断是否需要重新验证或审查。该记录不替代 GitHub/Stamp 审批、仓库保护规则或合并检查。发布 review 仍需单独的 `review` 委托及 `check-github-action --action review`；其他写操作不会因加入评审任务而开放。
 

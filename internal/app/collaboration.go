@@ -246,6 +246,35 @@ func (s *Service) linkProjectTask(ctx context.Context, w WorkContext, in WorkInp
 	return link, s.Store.SaveForkCollaboration(ctx, w.Event.Key, w.Fork.Round, w.CurrentVersion, w.Fork.Revision, c, nil)
 }
 
+// A task's link can survive an ownership handoff. Persist the live executor
+// before granting a source operation, even when the successor reuses that link.
+// Failure to save this audit record must prevent the operation from starting.
+func (s *Service) recordProjectActor(ctx context.Context, w *WorkContext, in WorkInput, operation string) error {
+	if w.Collaboration == nil || !slices.Contains([]string{"write", "test", "coordinate"}, operation) {
+		return nil
+	}
+	c := *w.Collaboration
+	item := c.item(in.TaskID)
+	if item == nil {
+		root, err := s.fixedTask(ctx, *w)
+		if err != nil || in.TaskID != root.MessageID {
+			return ErrWorkDenied
+		}
+		c.Items = append(c.Items, ForkWorkItem{Task: root, Kind: "coordinate", Registered: in.Executor})
+		item = &c.Items[len(c.Items)-1]
+	}
+	if item.Kind != "sync" && item.Kind != "coordinate" || slices.Contains(item.Actors, in.Executor) {
+		return nil
+	}
+	item.Actors = append(item.Actors, in.Executor)
+	if err := s.Store.SaveForkCollaboration(ctx, w.Event.Key, w.Fork.Round, w.CurrentVersion, w.Fork.Revision, c, nil); err != nil {
+		return err
+	}
+	c.Revision++
+	w.Collaboration = &c
+	return nil
+}
+
 func (s *Service) RecordContribution(ctx context.Context, in ContributionInput) error {
 	w, err := s.checkWork(ctx, in.WorkInput, "report")
 	if err != nil {
@@ -329,6 +358,9 @@ func (s *Service) requireIndependentReviewer(ctx context.Context, w WorkContext,
 		}
 		if slices.Contains(other.Actors, in.Executor) {
 			return errors.New("a synchronization contributor cannot approve its own batch after handoff")
+		}
+		if other.Revoked {
+			continue // Historical actors remain authoritative after task deletion.
 		}
 		state, err := s.Raft.readTask(ctx, other.Task.Channel, other.Task.Number, other.Task.MessageID)
 		if err != nil {

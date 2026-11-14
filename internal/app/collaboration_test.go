@@ -647,3 +647,78 @@ func TestProjectPassedResultRequiresTheExecutingTask(t *testing.T) {
 		t.Fatal("successor claimed predecessor's test run", err)
 	}
 }
+
+func TestProjectHandoffRecordsSourceAuthorityBeforeWork(t *testing.T) {
+	for _, kind := range []string{"coordinate", "sync"} {
+		t.Run(kind, func(t *testing.T) {
+			s, g, api, coord, _, _ := projectFixture(t)
+			for _, item := range []struct{ id, kind string }{{projectTestTask, "test"}, {projectReviewTask, "review"}} {
+				if _, err := s.RegisterForkWorkItem(t.Context(), ForkWorkItemInput{WorkInput: coord, ParticipantTask: item.id, Kind: item.kind}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writer := coord
+			if kind == "sync" {
+				if _, err := s.RegisterForkWorkItem(t.Context(), ForkWorkItemInput{WorkInput: coord, ParticipantTask: projectSyncTask, Kind: kind}); err != nil {
+					t.Fatal(err)
+				}
+				writer = participantInput(t, s, coord.EventID, projectSyncTask, "@syncer")
+			}
+			state := api.tasks[writer.TaskID]
+			state.Owner = "reviewer"
+			api.tasks[writer.TaskID] = state
+			writer.Executor = "@reviewer"
+			// The successor reuses the predecessor's valid link instead of linking
+			// again. The permission check itself must preserve this writer.
+			if _, err := s.PrepareWorkspace(t.Context(), writer, g.repository); err != nil {
+				t.Fatal(err)
+			}
+			state.Owner = "successor"
+			api.tasks[writer.TaskID] = state
+			tester := participantInput(t, s, coord.EventID, projectTestTask, "@tester")
+			proof, err := s.TestWorkspace(t.Context(), tester)
+			if err != nil || !proof.Passed {
+				t.Fatal(proof, err)
+			}
+			reviewer := participantInput(t, s, coord.EventID, projectReviewTask, "@reviewer")
+			api.reportTask, api.reportAuthor = projectReviewTask, "reviewer"
+			err = s.RecordContribution(t.Context(), ContributionInput{WorkInput: reviewer, ReportID: projectReport, Outcome: "approved", Summary: "Review after a source-task handoff.", Head: proof.Head, Base: proof.Base})
+			if err == nil || !strings.Contains(err.Error(), "handoff") {
+				t.Fatal("unrecorded successor approved its own work", err)
+			}
+		})
+	}
+}
+
+func TestProjectDeletedRevokedTaskRetainsOnlyHistoricalActors(t *testing.T) {
+	s, _, api, coord, _, _ := projectFixture(t)
+	for _, item := range []struct{ id, kind string }{{projectSyncTask, "sync"}, {projectTestTask, "test"}, {projectReviewTask, "review"}} {
+		if _, err := s.RegisterForkWorkItem(t.Context(), ForkWorkItemInput{WorkInput: coord, ParticipantTask: item.id, Kind: item.kind}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	participantInput(t, s, coord.EventID, projectSyncTask, "@syncer")
+	if _, err := s.RegisterForkWorkItem(t.Context(), ForkWorkItemInput{WorkInput: coord, ParticipantTask: projectSyncTask, Kind: "sync", Revoke: true}); err != nil {
+		t.Fatal(err)
+	}
+	delete(api.tasks, projectSyncTask)
+	tester := participantInput(t, s, coord.EventID, projectTestTask, "@tester")
+	proof, err := s.TestWorkspace(t.Context(), tester)
+	if err != nil || !proof.Passed {
+		t.Fatal(proof, err)
+	}
+	reviewer := participantInput(t, s, coord.EventID, projectReviewTask, "@reviewer")
+	api.reportTask, api.reportAuthor = projectReviewTask, "reviewer"
+	report := ContributionInput{WorkInput: reviewer, ReportID: projectReport, Outcome: "approved", Summary: "Independent review after revocation.", Head: proof.Head, Base: proof.Base}
+	if err = s.RecordContribution(t.Context(), report); err != nil {
+		t.Fatal("deleted revoked task blocked an independent reviewer", err)
+	}
+	state := api.tasks[projectReviewTask]
+	state.Owner = "syncer"
+	api.tasks[projectReviewTask] = state
+	report.WorkInput = participantInput(t, s, coord.EventID, projectReviewTask, "@syncer")
+	api.reportAuthor = "syncer"
+	if err = s.RecordContribution(t.Context(), report); err == nil || !strings.Contains(err.Error(), "handoff") {
+		t.Fatal("deleting the task erased the original writer", err)
+	}
+}
