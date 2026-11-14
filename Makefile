@@ -11,11 +11,13 @@ setup: build
 	bash scripts/setup.sh
 
 test:
+	python3 -m unittest discover -s tests -p 'test_*.py'
 	go test -race -timeout $(TEST_TIMEOUT) ./...
 
 # Server drivers require a private DSN for a disposable loopback database ending
 # in _test. GHRAFT_TEST_DRIVER=sqlite uses isolated temporary files instead.
 integration:
+	python3 -m unittest discover -s tests -p 'test_*.py'
 	GHRAFT_REQUIRE_DB=1 go test -race -timeout $(TEST_TIMEOUT) -count=1 -v ./...
 
 check:
