@@ -28,6 +28,7 @@ type participantRecipient struct {
 	Kind         string       `json:"kind"`
 	PR           int          `json:"pr,omitempty"`
 	HideMetadata bool         `json:"hide_metadata,omitempty"`
+	PRDiscussion bool         `json:"pr_discussion,omitempty"`
 }
 
 // Freeze the recipient set before any network write. A retry uses that plan
@@ -54,6 +55,25 @@ func (r *Raft) projectParticipantPlan(ctx context.Context, ev Event) ([]particip
 		batches = nil
 		for _, batch := range p.Queue.Batches {
 			batches = append(batches, batch.Progress)
+		}
+		// A merged batch can leave the active queue in the same observation.
+		// Its last update still belongs in that PR's existing discussion.
+		for _, change := range payload.Changes {
+			if id, ok := strings.CutPrefix(change.Object, "queue:"); ok && idRE.MatchString(id) && queueIndex(p, id) < 0 {
+				before := obj(change.Before)
+				number, _ := before["pr"].(float64)
+				batches = append(batches, ForkProgress{BatchID: id, PR: int(number)})
+			}
+		}
+	} else {
+		for _, change := range payload.Changes {
+			if change.Object == "fork" {
+				before := obj(change.Before)
+				if round := str(before["round"]); idRE.MatchString(round) && round != p.Round {
+					number, _ := before["pr"].(float64)
+					batches = append(batches, ForkProgress{Round: round, PR: int(number)})
+				}
+			}
 		}
 	}
 	recipients := []participantRecipient{}
@@ -83,7 +103,7 @@ func (r *Raft) projectParticipantPlan(ctx context.Context, ev Event) ([]particip
 			if item.Revoked || item.Kind == "coordinate" || item.Task.MessageID == payload.OriginTask {
 				continue
 			}
-			recipients = append(recipients, participantRecipient{item.Task, item.Kind, batch.PR, payload.Classification == "private" && !r.Config.PrivateNotificationDetails})
+			recipients = append(recipients, participantRecipient{item.Task, item.Kind, batch.PR, payload.Classification == "private" && !r.Config.PrivateNotificationDetails, item.PRDiscussion})
 		}
 	}
 	return r.Store.PrepareParticipantPlan(ctx, ev.ID, recipients)
@@ -97,7 +117,7 @@ func (r *Raft) sendProjectParticipants(ctx context.Context, ev Event) error {
 		return err
 	}
 	for _, recipient := range recipients {
-		if err := r.sendParticipantUpdate(ctx, ev, ForkProgress{PR: recipient.PR}, ForkWorkItem{Task: recipient.Task, Kind: recipient.Kind}, recipient.HideMetadata); err != nil {
+		if err := r.sendParticipantUpdate(ctx, ev, ForkProgress{PR: recipient.PR}, ForkWorkItem{Task: recipient.Task, Kind: recipient.Kind, PRDiscussion: recipient.PRDiscussion}, recipient.HideMetadata); err != nil {
 			return err
 		}
 	}
@@ -180,6 +200,9 @@ func (r *Raft) sendParticipantUpdate(ctx context.Context, ev Event, p ForkProgre
 	d.Request.Target, d.Request.Key = item.Task.target(), "github-participant:"+ev.ID+":"+item.Task.MessageID
 	d.Request.Continue, d.Request.Draft = true, true
 	d.Request.Content = fmt.Sprintf("%s · %s 工作项有更新。\n\n%s 请读取本 thread 和 work-context.collaboration，按本任务的实时归属处理；先运行 verify-claim --event %s --task %s --executor <自己的名称>。只做本工作项范围内的操作。已有结果与当前提交一致时不要重复执行；需要更新结果时，在本 thread 发布报告后使用 record-contribution。其他工作项及项目协调任务保持原归属。\n\n事件 ID：%s\n证据版本：%s", subject, item.Kind, owner, ev.ID, item.Task.MessageID, ev.ID, ev.Version)
+	if item.PRDiscussion {
+		d.Request.Content = fmt.Sprintf("%s 有更新。\n\n%s 请在本 PR 的固定讨论区核对提交、CI 及评审变化。用户邀请的其他 agent 可以直接在这里 review 和回复，不接管项目同步任务；正式评审结果仍须使用实际任务归属和当前提交证明。PR 已结束时保留原任务记录，不自动重开或另建任务。\n\n事件 ID：%s\n证据版本：%s\n任务：%s", subject, owner, ev.ID, ev.Version, item.Task.MessageID)
+	}
 	if state.Status == "closed" || state.Status == "done" || state.OwnerType == "user" {
 		d.Request.Content += "\n本任务当前已结束或由用户负责，此通知不恢复任务状态或授予执行权限。"
 	}

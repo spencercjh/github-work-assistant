@@ -18,13 +18,14 @@ type ForkCollaboration struct {
 }
 
 type ForkWorkItem struct {
-	Task       TaskDispatch           `json:"task"`
-	Kind       string                 `json:"kind"`
-	Registered string                 `json:"registered_by"`
-	Actors     []string               `json:"executors,omitempty"`
-	Revoked    bool                   `json:"revoked,omitempty"`
-	Link       *TaskLink              `json:"link,omitempty"`
-	Result     *ContributionReference `json:"result,omitempty"`
+	Task         TaskDispatch           `json:"task"`
+	Kind         string                 `json:"kind"`
+	Registered   string                 `json:"registered_by"`
+	Actors       []string               `json:"executors,omitempty"`
+	Revoked      bool                   `json:"revoked,omitempty"`
+	PRDiscussion bool                   `json:"pr_discussion,omitempty"`
+	Link         *TaskLink              `json:"link,omitempty"`
+	Result       *ContributionReference `json:"result,omitempty"`
 }
 
 type ContributionReference struct {

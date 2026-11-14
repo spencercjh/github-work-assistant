@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,11 +35,13 @@ type projectAPI struct {
 	missingChannel           string
 	lostSend                 bool
 	lostTarget               string
+	lostPRTask               bool
+	prRoots                  map[string]string
 }
 
 func newProjectAPI(t *testing.T, s *Service) *projectAPI {
 	t.Helper()
-	a := &projectAPI{tasks: map[string]projectTask{}, roots: map[string]string{}, requests: map[string]string{}, sends: map[string]string{}}
+	a := &projectAPI{tasks: map[string]projectTask{}, roots: map[string]string{}, requests: map[string]string{}, sends: map[string]string{}, prRoots: map[string]string{}}
 	a.add("#github-work", fixtureTask, 17, "worker")
 	a.roots["#github-work"] = fixtureTask
 	a.add("#github-work", projectSyncTask, 18, "syncer")
@@ -98,6 +101,20 @@ func (a *projectAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.requests[key] = encoded
+		if strings.HasPrefix(key, "project-pr:") {
+			id = a.prRoots[key]
+			if id == "" {
+				number := 100 + len(a.prRoots)
+				id = fmt.Sprintf("50000000-0000-4000-8000-%012d", number)
+				a.prRoots[key] = id
+				a.add(channel, id, number, "")
+			}
+			if a.lostPRTask {
+				a.lostPRTask = false
+				w.WriteHeader(502)
+				return
+			}
+		}
 		write(map[string]any{"tasks": []taskState{a.tasks[id].taskState}})
 	case r.URL.Path == "/internal/agent-api/history":
 		task := a.tasks[a.reportTask]

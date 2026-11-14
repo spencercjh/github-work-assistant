@@ -64,6 +64,9 @@ func (r *Raft) ExternalIdentity(ctx context.Context) (ExternalIdentity, error) {
 func (r *Raft) sendExternal(ctx context.Context, ev Event) ([]byte, error) {
 	r = r.forResource(ev.Key)
 	if r.Config.SharedTasksFor(ev.Key) {
+		if err := r.ensureProjectPRTasks(ctx, ev); err != nil {
+			return nil, err
+		}
 		if _, err := r.projectParticipantPlan(ctx, ev); err != nil {
 			return nil, err
 		}

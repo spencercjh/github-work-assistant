@@ -62,8 +62,13 @@ func (r *Raft) sendSharedTask(ctx context.Context, ev Event) ([]byte, error) {
 		}
 		// Another event can finish the first event's interrupted delivery. Record
 		// its receipt now so the first event cannot later be sent as a new reply.
-		if err = r.Store.Delivery(ctx, first.ID, receipt, true, 0); err != nil {
-			return nil, err
+		if first.ID != ev.ID {
+			if err = r.sendProjectParticipants(ctx, first); err != nil {
+				return nil, err
+			}
+			if err = r.Store.Delivery(ctx, first.ID, receipt, true, 0); err != nil {
+				return nil, err
+			}
 		}
 		d.Task = &root
 	}
