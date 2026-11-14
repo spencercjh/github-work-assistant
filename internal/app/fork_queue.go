@@ -15,6 +15,15 @@ import (
 // separate: the original owner still operates one selected workspace at a time.
 type ForkQueueConfig struct {
 	MaxOpenPRs int `json:"max_open_prs,omitempty"`
+	// Optional ancestry clone for queue planning; does not change the fork identity.
+	LocalRepository string `json:"local_repository,omitempty"`
+}
+
+func (f ForkSpec) queueGitSpec() ForkSpec {
+	if f.Queue != nil && f.Queue.LocalRepository != "" {
+		f.LocalRepository = f.Queue.LocalRepository
+	}
+	return f
 }
 
 func (f ForkSpec) queueLimit() int {
@@ -45,6 +54,8 @@ type ForkQueueInput struct {
 }
 
 const forkQueueInstruction = `A bounded stacked PR queue is enabled. Keep the original maintenance task and owner. The queue's prepared_through is not merged progress. After every batch passes required tests and is reported changes-ready (awaiting-review), continue start-sync-batch while capacity remains; for a human merge choice alone, report needs-decision with review_only=true after asking the decision maker (all changes-ready gates still apply); never mark a correctness, conflict or test failure review-only; select-sync-batch --batch <batch_id> resumes an earlier batch. Inspect all queue entries before choosing work. Failed tests, unresolved correctness issues, conflicts, closed PRs and stale dependencies stop the affected chain. Only the first unfinished batch may merge, only into the configured integration branch; NEVER merge a descendant PR into its predecessor branch. After predecessor or integration changes, select affected batches oldest-first and run rebuild-sync-batch, then prepare-worktree in its new generation. Replay the SAME source range, preserve upstream authors, sign commits according to repository policy, refresh the mapping and run the complete validation. Re-read old work and the returned rebuild source before replay; do not reset existing workspaces. A rebuild may replace only its captured remote head with an explicit lease and may retarget only the exact current PR through the separately delegated retarget-pr action. Refresh CI and obtain a new independent review for the tested head AND target; old approval does not survive a changed base. Close/rejection never advances or skips a source range. Queue mode grants no merge, publication, deployment, workflow or credential permission. Keep test-only CI separate from publishing, and route enterprise fixes into the integration branch through explicit deduplicated PRs; no automatic reverse synchronization.`
+
+const upstreamQueueInstruction = `A bounded original-upstream PR queue is enabled. Use start-sync-batch to pin the next first-parent source range after the verified completed cursor; the first baseline must already be in the integration history. Every PR head must remain the exact original upstream commit. All PRs target the configured integration branch, never a predecessor's source branch. Test each source head temporarily merged with the current integration branch, including downstream custom changes. After a batch passes required tests and is reported changes-ready, prepare its successor while capacity remains. Keep the original coordinating task; each PR has its own discussion. Inspect the whole queue; failed tests, conflicts, closed PRs and stale dependencies stop the affected chain. Only the oldest unfinished batch may merge, using a merge commit with the exact tested parents and tree. After integration changes or a predecessor merges, select affected batches oldest-first and run rebuild-sync-batch, prepare-worktree and complete validation against the new target. Rebuild preserves the same source range and upstream SHA, without creating adaptation commits, force-pushing or retargeting an existing open PR. Refresh CI and review against the new tested target; an old result cannot approve a different base. Preserve old workspaces and proofs. prepared_through is not merged progress; rejection never skips source ranges. Queue mode does not grant additional GitHub, merge, release or deployment permissions.`
 
 func cloneForkProgress(p ForkProgress) ForkProgress {
 	var result ForkProgress
@@ -240,7 +251,7 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		// the child remains stale until explicitly rebuilt and retargeted.
 		if i > 0 && requested.ParentBatch != "" {
 			parent := next.Queue.Batches[i-1]
-			if parent.Progress.Phase == "synced" || parent.Observation.Objects["pull"]["state"] == "closed" || requested.TargetBranch != parent.Progress.Branch {
+			if parent.Progress.Phase == "synced" || parent.Observation.Objects["pull"]["state"] == "closed" || (requested.SyncMode == adaptedBatches && requested.TargetBranch != parent.Progress.Branch) {
 				requested.TargetBranch = f.Target.Branch
 			}
 		}
@@ -273,7 +284,7 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 				}
 				if parent.Progress.Phase == "synced" {
 					reason = "predecessor merged; rebuild onto integration branch"
-				} else if parent.Progress.QueueStale != "" || parent.Observation.SyncHead != p.ParentHead || p.TargetBranch != parent.Progress.Branch {
+				} else if parent.Progress.QueueStale != "" || parent.Observation.SyncHead != p.ParentHead || (p.SyncMode == adaptedBatches && p.TargetBranch != parent.Progress.Branch) {
 					reason = "predecessor revision changed"
 				}
 			}
@@ -340,7 +351,7 @@ func (s *Service) collectForkQueue(ctx context.Context, f ForkSpec, expected For
 		if !shaRE.MatchString(next.Queue.MergedTarget) {
 			return errors.New("queue merge frontier has no verified target; reconcile its history")
 		}
-		repo, err := openForkGitRepository(ctx, f)
+		repo, err := openForkGitRepository(ctx, f.queueGitSpec())
 		if err != nil {
 			return err
 		}
@@ -393,7 +404,7 @@ func (s *Service) queueContext(ctx context.Context, in WorkInput) (WorkContext, 
 		return w, ForkSpec{}, err
 	}
 	f, ok := s.Config.Fork(w.Event.Key)
-	if !ok || f.Queue == nil || w.Fork == nil || w.Guide.ForkSyncMode != adaptedBatches {
+	if !ok || f.Queue == nil || w.Fork == nil {
 		return w, f, ErrWorkDenied
 	}
 	if err = requireForkContext(w, in); err != nil {
@@ -461,7 +472,10 @@ func (s *Service) RebuildForkBatch(ctx context.Context, in ForkQueueInput) (Fork
 			if !queueReviewReady(parent, w.Guide.Version) {
 				return p, errors.New("repair and validate the predecessor before rebuilding its dependent")
 			}
-			target, branch, parentID, parentHead = parent.Progress.ValidatedHead, parent.Progress.Branch, parent.Progress.BatchID, parent.Progress.ValidatedHead
+			parentID, parentHead = parent.Progress.BatchID, parent.Progress.ValidatedHead
+			if p.SyncMode == adaptedBatches {
+				target, branch = parent.Progress.ValidatedHead, parent.Progress.Branch
+			}
 		}
 	}
 	if !shaRE.MatchString(target) {
@@ -543,10 +557,13 @@ func (s *Service) startQueuedForkBatch(ctx context.Context, in ForkBatchInput, w
 		tail := q.Batches[len(q.Batches)-1]
 		after = tail.Progress.Upstream
 		if tail.Progress.Phase != "synced" {
-			target, targetBranch, parentID, parentHead = tail.Progress.ValidatedHead, tail.Progress.Branch, tail.Progress.BatchID, tail.Progress.ValidatedHead
+			parentID, parentHead = tail.Progress.BatchID, tail.Progress.ValidatedHead
+			if w.Guide.ForkSyncMode == adaptedBatches {
+				target, targetBranch = tail.Progress.ValidatedHead, tail.Progress.Branch
+			}
 		}
 	}
-	if after == "" && p.SyncMode == adaptedBatches {
+	if after == "" && (p.SyncMode == adaptedBatches || p.BatchID != "") {
 		after = p.BatchAfter
 	}
 	if after == "" {
@@ -558,7 +575,7 @@ func (s *Service) startQueuedForkBatch(ctx context.Context, in ForkBatchInput, w
 	if !shaRE.MatchString(target) {
 		return p, ErrStaleWork
 	}
-	repo, err := openForkGitRepository(ctx, f)
+	repo, err := openForkGitRepository(ctx, f.queueGitSpec())
 	if err != nil {
 		return p, err
 	}
@@ -569,6 +586,15 @@ func (s *Service) startQueuedForkBatch(ctx context.Context, in ForkBatchInput, w
 	if err = repo.ensureCommit(ctx, f.Target.Repo, target); err != nil {
 		return p, err
 	}
+	if w.Guide.ForkSyncMode == "" && len(q.Batches) == 0 {
+		present, err := repo.contains(ctx, after, target)
+		if err != nil {
+			return p, err
+		}
+		if !present {
+			return p, errors.New("original-upstream queue baseline must already be present in the integration history")
+		}
+	}
 	batch, err := nextForkBatch(ctx, repo, after, p.ObservedUpstream, in.Count)
 	if err != nil {
 		return p, err
@@ -577,11 +603,11 @@ func (s *Service) startQueuedForkBatch(ctx context.Context, in ForkBatchInput, w
 	id := hash([]byte(fmt.Sprintf("%s:batch:%s:%s", f.Key(), after, end)))
 	round := hash([]byte(fmt.Sprintf("%s:%s:%d", id, target, p.Revision+1)))
 	baseline := p.AdaptationBaseline
-	if baseline == "" {
+	if baseline == "" && w.Guide.ForkSyncMode == adaptedBatches {
 		baseline = after
 	}
 	next := ForkProgress{Queue: q, BatchID: id, IntegrationBase: integration, ParentBatch: parentID, ParentHead: parentHead, TargetBranch: targetBranch,
-		AdaptationBaseline: baseline, PrivateRepos: p.PrivateRepos, SpecVersion: f.Version(), SyncMode: adaptedBatches, Round: round,
+		AdaptationBaseline: baseline, PrivateRepos: p.PrivateRepos, SpecVersion: f.Version(), SyncMode: w.Guide.ForkSyncMode, Round: round,
 		Phase: "working", BatchAfter: after, BatchCommits: batch, BatchReason: in.Reason, Upstream: end, InitialTarget: target,
 		ObservedUpstream: p.ObservedUpstream, Branch: "ghraft/sync/" + f.ID + "/" + round[:12], LastSuccess: q.MergedThrough,
 		CreatedAt: time.Now().Unix(), GenerationAt: time.Now().Unix(), NextAttempt: time.Now().Add(4 * time.Hour).Unix()}

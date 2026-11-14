@@ -24,68 +24,73 @@ func prDiscussionItem(t *testing.T, s *Service, p ForkProgress) ForkWorkItem {
 }
 
 func TestProjectPRTasksAreDistinctPersistentAndReviewScoped(t *testing.T) {
-	s, q, _, after := newQueueFixture(t)
-	s.Config.Forks[0].Channel = "#github-work"
-	api := newProjectAPI(t, s)
-	appendQueue(t, s, after)
-	first := publishQueue(t, s, q)
-	one := prDiscussionItem(t, s, first)
-	appendQueue(t, s, "")
-	second := publishQueue(t, s, q)
-	two := prDiscussionItem(t, s, second)
-	if one.Task.MessageID == two.Task.MessageID || one.Task.MessageID == fixtureTask || len(api.prRoots) != 2 {
-		t.Fatal("PRs reused another PR or the coordinator", one, two)
+	for _, mode := range []string{"adapted", "original"} {
+		t.Run(mode, func(t *testing.T) {
+			s, q, _, after := newQueueFixtureMode(t, mode == "adapted")
+			s.Config.Forks[0].Channel = "#github-work"
+			api := newProjectAPI(t, s)
+			appendQueue(t, s, after)
+			first := publishQueue(t, s, q)
+			one := prDiscussionItem(t, s, first)
+			appendQueue(t, s, "")
+			second := publishQueue(t, s, q)
+			two := prDiscussionItem(t, s, second)
+			if one.Task.MessageID == two.Task.MessageID || one.Task.MessageID == fixtureTask || len(api.prRoots) != 2 {
+				t.Fatal("PRs reused another PR or the coordinator", one, two)
+			}
+			state := api.tasks[one.Task.MessageID]
+			if state.Owner != "" {
+				t.Fatal("collector assigned a reviewer")
+			}
+			state.Owner = "reviewer"
+			api.tasks[one.Task.MessageID] = state
+			in, w := queueInput(t, s)
+			context, err := s.WorkContextFor(t.Context(), in.EventID, "", one.Task.MessageID)
+			if err != nil || context.Fork.BatchID != first.BatchID {
+				t.Fatal("PR task did not select its own read context", context.Fork, err)
+			}
+			reviewer := participantInput(t, s, in.EventID, one.Task.MessageID, "@reviewer")
+			if _, err = s.PrepareWorkspace(t.Context(), reviewer, q.repository); err == nil {
+				t.Fatal("PR discussion granted source-write authority")
+			}
+			api.reportTask, api.reportAuthor = one.Task.MessageID, "reviewer"
+			if err = s.RecordContribution(t.Context(), ContributionInput{WorkInput: reviewer, ReportID: projectReport, Outcome: "approved", Summary: "Invited review in the PR's own thread.", Head: first.ValidatedHead, Base: first.ValidatedBase}); err != nil {
+				t.Fatal(err)
+			}
+			current, err := s.Store.ForkProgress(t.Context(), w.Event.Key)
+			if err != nil || current.BatchID != second.BatchID {
+				t.Fatal("review changed the writer's queue selection", err)
+			}
+			q.prs[first.Branch].check = "failure"
+			if err = s.Collect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			w, err = s.WorkContext(t.Context(), in.EventID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event, err := s.Store.Event(t.Context(), w.CurrentEventID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			deliverEvent(t, s, event)
+			key := "github-participant:" + event.ID + ":" + one.Task.MessageID
+			var message map[string]any
+			if json.Unmarshal([]byte(api.sends[key]), &message) != nil || message["target"] != one.Task.target() {
+				t.Fatal("CI update did not return to the earlier PR's thread", api.sends)
+			}
+			store := openTestStore(t)
+			s.Store, s.Raft.Store = store, store
+			deliverEvent(t, s, event)
+			if len(api.prRoots) != 2 {
+				t.Fatal("restart/replay duplicated a PR task")
+			}
+			if strings.Contains(api.requests[projectPRTaskKey(w.Event.Key, one.Task.Channel, first.PR)], "始终保持 in_progress") {
+				t.Fatal("PR task inherited the perpetual coordinator lifecycle")
+			}
+		})
 	}
-	state := api.tasks[one.Task.MessageID]
-	if state.Owner != "" {
-		t.Fatal("collector assigned a reviewer")
-	}
-	state.Owner = "reviewer"
-	api.tasks[one.Task.MessageID] = state
-	in, w := queueInput(t, s)
-	context, err := s.WorkContextFor(t.Context(), in.EventID, "", one.Task.MessageID)
-	if err != nil || context.Fork.BatchID != first.BatchID {
-		t.Fatal("PR task did not select its own read context", context.Fork, err)
-	}
-	reviewer := participantInput(t, s, in.EventID, one.Task.MessageID, "@reviewer")
-	if _, err = s.PrepareWorkspace(t.Context(), reviewer, q.repository); err == nil {
-		t.Fatal("PR discussion granted source-write authority")
-	}
-	api.reportTask, api.reportAuthor = one.Task.MessageID, "reviewer"
-	if err = s.RecordContribution(t.Context(), ContributionInput{WorkInput: reviewer, ReportID: projectReport, Outcome: "approved", Summary: "Invited review in the PR's own thread.", Head: first.ValidatedHead, Base: first.ValidatedBase}); err != nil {
-		t.Fatal(err)
-	}
-	current, err := s.Store.ForkProgress(t.Context(), w.Event.Key)
-	if err != nil || current.BatchID != second.BatchID {
-		t.Fatal("review changed the writer's queue selection", err)
-	}
-	q.prs[first.Branch].check = "failure"
-	if err = s.Collect(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	w, err = s.WorkContext(t.Context(), in.EventID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event, err := s.Store.Event(t.Context(), w.CurrentEventID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	deliverEvent(t, s, event)
-	key := "github-participant:" + event.ID + ":" + one.Task.MessageID
-	var message map[string]any
-	if json.Unmarshal([]byte(api.sends[key]), &message) != nil || message["target"] != one.Task.target() {
-		t.Fatal("CI update did not return to the earlier PR's thread", api.sends)
-	}
-	store := openTestStore(t)
-	s.Store, s.Raft.Store = store, store
-	deliverEvent(t, s, event)
-	if len(api.prRoots) != 2 {
-		t.Fatal("restart/replay duplicated a PR task")
-	}
-	if strings.Contains(api.requests[projectPRTaskKey(w.Event.Key, one.Task.Channel, first.PR)], "始终保持 in_progress") {
-		t.Fatal("PR task inherited the perpetual coordinator lifecycle")
-	}
+
 }
 
 func TestProjectPRTaskLostResponseRetryAndRouteGuard(t *testing.T) {

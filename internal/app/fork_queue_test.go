@@ -54,7 +54,11 @@ func (q *queueSource) CollectFork(ctx context.Context, f ForkSpec, p ForkProgres
 }
 func newQueueFixture(t *testing.T) (*Service, *queueSource, *taskAPI, string) {
 	t.Helper()
-	s, g, api := forkFixtureConfigured(t, true)
+	return newQueueFixtureMode(t, true)
+}
+func newQueueFixtureMode(t *testing.T, adapted bool) (*Service, *queueSource, *taskAPI, string) {
+	t.Helper()
+	s, g, api := forkFixtureConfigured(t, adapted)
 	after := fixtureGit(t, g.repository, "", "rev-parse", g.upstream+"^")
 	// Three independent changes on a linear upstream, retaining the fork offset.
 	for i := 2; i <= 3; i++ {
@@ -66,6 +70,9 @@ func newQueueFixture(t *testing.T) (*Service, *queueSource, *taskAPI, string) {
 	q := &queueSource{forkFixtureSource: g, prs: map[string]*queueRemote{}}
 	s.GH = q
 	s.Config.Forks[0].Queue = &ForkQueueConfig{MaxOpenPRs: 3}
+	if !adapted {
+		s.Config.Forks[0].Queue.LocalRepository = g.repository
+	}
 	// Exercise persistent archive keys at the maximum supported identifier size
 	// on every backend, including MySQL's bounded metadata name column.
 	s.Config.Forks[0].ID = strings.Repeat("q", 48)
@@ -97,10 +104,13 @@ func portQueue(t *testing.T, s *Service, q *queueSource) (ForkProgress, Workspac
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree := fixtureGit(t, q.repository, "", "merge-tree", "--write-tree", w.Fork.InitialTarget, w.Fork.Upstream)
-	head := mappedCommit(t, q.repository, tree, w.Fork.InitialTarget, w.Fork.Upstream)
-	fixtureGit(t, ws.Path, "", "reset", "--hard", head)
-	writeMapping(t, ws.MappingFile, []ForkCommitMapping{{Upstream: w.Fork.Upstream, Commit: head, Status: "ported", Reason: "Preserve downstream offset."}})
+	head := w.Fork.Upstream
+	if w.Fork.SyncMode == adaptedBatches {
+		tree := fixtureGit(t, q.repository, "", "merge-tree", "--write-tree", w.Fork.InitialTarget, w.Fork.Upstream)
+		head = mappedCommit(t, q.repository, tree, w.Fork.InitialTarget, w.Fork.Upstream)
+		fixtureGit(t, ws.Path, "", "reset", "--hard", head)
+		writeMapping(t, ws.MappingFile, []ForkCommitMapping{{Upstream: w.Fork.Upstream, Commit: head, Status: "ported", Reason: "Preserve downstream offset."}})
+	}
 	proof, err := s.TestWorkspace(t.Context(), in)
 	if err != nil || !proof.Passed {
 		t.Fatal(proof, err)
@@ -110,7 +120,7 @@ func portQueue(t *testing.T, s *Service, q *queueSource) (ForkProgress, Workspac
 	if err != nil || !check.Permitted {
 		t.Fatal(check, err)
 	}
-	if w.Fork.RebuildFromHead != "" && check.ExpectedRemoteHead != w.Fork.RebuildFromHead {
+	if w.Fork.SyncMode == adaptedBatches && w.Fork.RebuildFromHead != "" && check.ExpectedRemoteHead != w.Fork.RebuildFromHead {
 		t.Fatal("rebuild lost exact lease", check)
 	}
 	ws.Head = head
@@ -127,9 +137,13 @@ func publishQueue(t *testing.T, s *Service, q *queueSource) ForkProgress {
 		r.head = ws.Head
 	}
 	in, w := queueInput(t, s)
-	body, err := os.ReadFile(proof.PRBodyFile)
-	if err != nil {
-		t.Fatal(err)
+	body := []byte("Validate the original upstream range with downstream changes.")
+	if proof.PRBodyFile != "" {
+		var err error
+		body, err = os.ReadFile(proof.PRBodyFile)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if r.number == 0 {
 		check, err := s.CheckGitHubAction(t.Context(), GitHubActionInput{WorkInput: in, Action: "open-pr", Ref: p.Branch, Head: ws.Head, Base: p.InitialTarget, Body: string(body)})
@@ -151,7 +165,7 @@ func publishQueue(t *testing.T, s *Service, q *queueSource) ForkProgress {
 	if w.Fork.PR != r.number {
 		t.Fatal("orphan PR not recovered")
 	}
-	if err = s.RecordWorkResult(t.Context(), WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "changes-ready", Summary: "Validated and published, awaiting independent review."}); err != nil {
+	if err := s.RecordWorkResult(t.Context(), WorkResult{WorkInput: in, ReportID: fixtureReport, Outcome: "changes-ready", Summary: "Validated and published, awaiting independent review."}); err != nil {
 		t.Fatal(err)
 	}
 	_, w = queueInput(t, s)
@@ -175,7 +189,11 @@ func mergeQueue(t *testing.T, s *Service, q *queueSource, id string) ForkProgres
 	if err != nil || !check.Permitted {
 		t.Fatal(check, err)
 	}
-	r.merge = syntheticCommit(t, q.repository, w.Fork.ValidatedTree, q.target)
+	parents := []string{q.target}
+	if p.SyncMode == "" {
+		parents = append(parents, p.ValidatedHead)
+	}
+	r.merge = syntheticCommit(t, q.repository, w.Fork.ValidatedTree, parents...)
 	r.closed, r.merged = true, true
 	q.target = r.merge
 	in, _ = queueInput(t, s)
@@ -508,7 +526,7 @@ func TestForkQueueMetricsAndPolicy(t *testing.T) {
 		t.Fatal("policy changed relationship identity")
 	}
 	s.Config.Repositories[0].ForkSyncMode = ""
-	if s.Config.validateForks() == nil {
-		t.Fatal("unsupported original-commit queue accepted")
+	if err := s.Config.validateForks(); err != nil {
+		t.Fatal("original-commit queue rejected", err)
 	}
 }
