@@ -86,6 +86,19 @@ coord=(--event "$EVENT_ID" --executor "$COORDINATOR"
 
 ## 参与者读取与报告
 
+仓库可安装 [上游同步 skill](../skills/upstream-sync/SKILL.md)，将下面的命令串成刷新、投递、关联和保存上下文的入口。部署者提供本机实例 `run` 路径，执行者仍使用自己的实时任务归属。仓库文件只保存项目绑定，不保存凭据、运行时事件版本或私有上下文。
+
+在目标仓库的独立工作区生成文件，然后按该仓库规则审阅并提交：
+
+```bash
+python3 skills/upstream-sync/scripts/sync_work.py install \
+  --destination /path/to/fork/.agents/skills/upstream-sync \
+  --fork engine --target your-org/engine --target-branch main \
+  --upstream upstream/engine --upstream-branch main --mode upstream-only
+```
+
+已有目录不会被覆盖。更新时先生成到另一目录，对比变更，再按仓库流程替换。skill 自身是下游维护文件；原样同步模式不要将其修改放入上游同步 head。安装不需要重启服务，也不替代下面的程序检查。
+
 参与者用自己的任务 UUID 读取上下文。程序据此找到对应批次，无须切换同步工作区：
 
 ```bash
