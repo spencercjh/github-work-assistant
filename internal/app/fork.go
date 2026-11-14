@@ -105,8 +105,13 @@ func (c Config) validateForks() error {
 		if g.ForkSyncMode == adaptedBatches && f.LocalRepository == "" {
 			return errors.New("adapted batches require a complete local_repository")
 		}
-		if f.Queue != nil && (g.ForkSyncMode != adaptedBatches || f.Queue.MaxOpenPRs < 0 || f.Queue.MaxOpenPRs > 50) {
-			return errors.New("fork queue requires adapted-batches and max_open_prs in 1..50 (0 defaults to 10)")
+		if f.Queue != nil {
+			if f.Queue.MaxOpenPRs < 0 || f.Queue.MaxOpenPRs > 50 {
+				return errors.New("fork queue requires max_open_prs in 1..50 (0 defaults to 10)")
+			}
+			if path := f.queueGitSpec().LocalRepository; !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") {
+				return errors.New("fork queue requires an absolute local_repository for ancestry checks")
+			}
 		}
 		if g.Mode != "local-edit" || len(g.TestCommands) == 0 {
 			return errors.New("fork maintenance requires an explicit local-edit target policy and regression commands")
@@ -233,11 +238,17 @@ const legacyAdaptedMergeInstruction = "Merge requires separate delegation and a 
 
 func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
 	g, err := d.guide(c, adaptedMergeInstruction)
-	if err == nil && d.Fork != nil && g.ForkSyncMode == adaptedBatches {
-		g.Text += "\n\n" + adaptedProvenanceInstruction
+	if err == nil && d.Fork != nil {
+		if g.ForkSyncMode == adaptedBatches {
+			g.Text += "\n\n" + adaptedProvenanceInstruction
+		}
 		if d.Fork.Queue != nil {
 			g.ForkQueue = d.Fork.Queue
-			g.Text += "\n\n" + forkQueueInstruction
+			if g.ForkSyncMode == adaptedBatches {
+				g.Text += "\n\n" + forkQueueInstruction
+			} else {
+				g.Text += "\n\n" + upstreamQueueInstruction
+			}
 		}
 		g.Version = ""
 		g.Version = hash(canonical(g))
@@ -321,9 +332,9 @@ func planFork(spec ForkSpec, p ForkProgress, o ForkObservation, now int64) ForkP
 	}
 	p.SpecVersion = spec.Version()
 	p.ObservedUpstream = o.Upstream
-	// Adapted rounds are explicitly selected from the verified cursor. Never
+	// Adapted and queued rounds are explicitly selected from the verified cursor. Never
 	// fall back to merging the latest upstream after finishing a batch.
-	if p.SyncMode == adaptedBatches && (p.Phase == "synced" || p.Phase == "restart") {
+	if (p.SyncMode == adaptedBatches || spec.Queue != nil) && (p.Phase == "synced" || p.Phase == "restart") {
 		return p
 	}
 	if p.Round == "" || p.Phase == "synced" || p.Phase == "restart" {
@@ -362,7 +373,7 @@ func forkSnapshot(spec ForkSpec, p ForkProgress, o ForkObservation) []byte {
 		objects = Objects{}
 	}
 	objects["fork"] = map[string]any{"id": spec.ID, "upstream_repo": spec.Upstream.Repo, "upstream_branch": spec.Upstream.Branch, "target_repo": spec.Target.Repo, "target_branch": spec.Target.Branch, "round": p.Round, "upstream_sha": p.Upstream, "initial_target_sha": p.InitialTarget, "target_sha": o.Target, "sync_branch": p.Branch, "pr": p.PR, "remote_head": o.SyncHead, "contains_pinned": o.ContainsPinned, "contains_validated": o.ContainsValidated, "merge_verified": o.MergeVerified, "merge_commit_sha": o.MergeCommit, "wake": p.Wake}
-	if p.SyncMode == adaptedBatches {
+	if p.SyncMode == adaptedBatches || p.BatchID != "" {
 		facts := objects["fork"]
 		facts["sync_mode"], facts["batch_after"], facts["batch_commits"], facts["batch_reason"] = p.SyncMode, p.BatchAfter, p.BatchCommits, p.BatchReason
 		facts["observed_upstream_sha"] = o.Upstream

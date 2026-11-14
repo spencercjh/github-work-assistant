@@ -23,8 +23,13 @@ func validForkProofHead(p ForkProgress) bool {
 	if !shaRE.MatchString(p.ValidatedHead) {
 		return false
 	}
-	if p.SyncMode == adaptedBatches {
-		return shaRE.MatchString(p.BatchAfter) && len(p.BatchCommits) > 0 && p.BatchCommits[len(p.BatchCommits)-1] == p.Upstream && p.ValidatedHead != p.InitialTarget
+	if p.SyncMode == adaptedBatches || p.BatchID != "" {
+		if !shaRE.MatchString(p.BatchAfter) || len(p.BatchCommits) == 0 || p.BatchCommits[len(p.BatchCommits)-1] != p.Upstream {
+			return false
+		}
+		if p.SyncMode == adaptedBatches {
+			return p.ValidatedHead != p.InitialTarget
+		}
 	}
 	return p.SyncMode == "" && p.ValidatedHead == p.Upstream
 }
@@ -79,7 +84,7 @@ func (s *Service) StartForkBatch(ctx context.Context, in ForkBatchInput) (ForkPr
 		return ForkProgress{}, err
 	}
 	f, ok := s.Config.Fork(w.Event.Key)
-	if !ok || w.Fork == nil || w.Guide.ForkSyncMode != adaptedBatches || w.Guide.Mode != "local-edit" || f.LocalRepository == "" || w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
+	if !ok || w.Fork == nil || (w.Guide.ForkSyncMode != adaptedBatches && f.Queue == nil) || w.Guide.Mode != "local-edit" || f.queueGitSpec().LocalRepository == "" || w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
 		return ForkProgress{}, ErrWorkDenied
 	}
 	if f.Queue != nil {

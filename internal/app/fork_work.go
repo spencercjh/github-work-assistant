@@ -108,7 +108,7 @@ func (s *Service) checkForkAction(ctx context.Context, w WorkContext, in GitHubA
 			}
 			if _, err = gitLocal(ctx, local.Path, "merge-base", "--is-ancestor", remote, in.Head); err != nil {
 				r := w.Guide.SyncBranchReplacement
-				queueLease := p.Queue != nil && p.RebuildFromHead == remote && shaRE.MatchString(p.RebuildFromBase)
+				queueLease := p.SyncMode == adaptedBatches && p.Queue != nil && p.RebuildFromHead == remote && shaRE.MatchString(p.RebuildFromBase)
 				if !queueLease && (r == nil || r.Branch != p.Branch || r.From != remote || r.To != in.Head) {
 					return result, errors.New("existing remote branch is not an ancestor of pinned upstream; request an exact branch replacement or restart decision")
 				}

@@ -354,4 +354,4 @@ work=(--event "$EVENT_ID" --executor "$EXECUTOR"
 
 ## 同步 PR 队列
 
-`adapted-batches` 可通过默认关闭的 `queue` 配置持续准备多个串联 PR。每批单独保存来源和证明，仅队首可合入正式目标。配置、重建与企业版分支流程见[持续准备同步 PR](FORK-QUEUE.md)。
+原样同步和 `adapted-batches` 均可通过默认关闭的 `queue` 配置持续准备多个 PR。原样同步的 PR 均以正式目标为基线并保留上游提交；适配模式使用串联分支。每批单独保存来源和证明，仅队首可合入正式目标。配置、重建与企业版分支流程见[持续准备同步 PR](FORK-QUEUE.md)。
