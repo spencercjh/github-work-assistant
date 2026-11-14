@@ -20,6 +20,7 @@ type BranchRef struct {
 }
 type ForkSpec struct {
 	ID              string           `json:"id"`
+	Channel         string           `json:"channel,omitempty"`
 	Upstream        BranchRef        `json:"upstream"`
 	Target          BranchRef        `json:"target"`
 	LocalRepository string           `json:"local_repository,omitempty"`
@@ -63,6 +64,7 @@ func (f ForkSpec) Version() string {
 	// Queue policy may change without changing the maintained repository pair.
 	// The complete policy is still included in the guide's proof fingerprint.
 	f.Queue = nil
+	f.Channel = ""
 	return hash(canonical(f))
 }
 func (c Config) Fork(key string) (ForkSpec, bool) {
@@ -74,6 +76,9 @@ func (c Config) Fork(key string) (ForkSpec, bool) {
 	return ForkSpec{}, false
 }
 func (c Config) validateForks() error {
+	if err := c.validateProjectChannels(); err != nil {
+		return err
+	}
 	seen, targets := map[string]bool{}, map[string]bool{}
 	for _, f := range c.Forks {
 		if !forkIDRE.MatchString(f.ID) || seen[f.ID] {
@@ -243,6 +248,10 @@ func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
 func (d WorkDefinition) guide(c Config, adaptedMerge string) (RepositoryGuide, error) {
 	g, err := c.RepositoryGuide(d.Repository())
 	if err == nil && d.Fork != nil {
+		if d.Fork.Channel != "" {
+			g.TaskTarget = d.Fork.Channel
+			g.Text += "\n\n" + projectCollaborationInstruction
+		}
 		if g.ForkSyncMode == adaptedBatches {
 			g.Text += "\n\nUse start-sync-batch to select the oldest next first-parent upstream commits after the documented baseline or verified completed batch. Prepare a separate branch from the target, port only the listed changes and preserve custom behavior. Record adaptations and already-present changes for human review; ancestry does not prove ported semantics. Test the actual adapted head merged with the current target. No upstream writes or direct target pushes; only the current sync branch and its PR. " + adaptedMerge
 			g.Text += "\nTrusted maintenance rule: " + string(canonical(d.Fork))
@@ -427,6 +436,7 @@ func (c Config) managedPR(w Watch, snapshot Snapshot) bool {
 
 func (r *Raft) forkNotice(ev Event, f ForkSpec) (eventNotice, error) {
 	var p struct {
+		Kind           string       `json:"kind"`
 		Classification string       `json:"data_classification"`
 		Subject        eventSubject `json:"subject"`
 		Changes        []Change     `json:"changes"`
@@ -440,6 +450,9 @@ func (r *Raft) forkNotice(ev Event, f ForkSpec) (eventNotice, error) {
 	subject := noticeText(f.Target.Repo+" · "+f.Target.Branch, 160)
 	if p.Subject.Kind == "Fork" && p.Subject.Title != "" {
 		subject = noticeText(p.Subject.Title, 160)
+	}
+	if p.Kind == "collaboration.updated" {
+		return eventNotice{"Fork 协作有更新 · " + subject, "工作项或其结果已更新。读取 work-context.collaboration 中的任务、报告引用和 current 标记；这是本地协作更新，不代表 GitHub 新变化或新的发布授权。", subject}, nil
 	}
 	lines := []string{"上游：" + noticeMarkdown(f.Upstream.Repo+" · "+f.Upstream.Branch), "目标：" + noticeMarkdown(subject)}
 	for _, c := range p.Changes {
@@ -474,6 +487,10 @@ func (r *Raft) forkNotice(ev Event, f ForkSpec) (eventNotice, error) {
 			lines = append(lines, "- "+noticeMarkdown(c.text))
 		}
 	}
-	lines = append(lines, "处理前读取当前维护进度；已有同步 PR 的评审与检查仍由本工作的负责人处理。", "[查看目标仓库](https://github.com/"+f.Target.Repo+")")
+	instruction := "处理前读取当前维护进度；已有同步 PR 的评审与检查仍由本工作的负责人处理。"
+	if f.Channel != "" {
+		instruction = "处理前读取维护进度及 collaboration：同步、测试、评审各自在已关联任务的讨论区继续，协调者汇总结果；不接管其他工作项。"
+	}
+	lines = append(lines, instruction, "[查看目标仓库](https://github.com/"+f.Target.Repo+")")
 	return eventNotice{"Fork 维护有更新 · " + subject, strings.Join(lines, "\n\n"), subject}, nil
 }

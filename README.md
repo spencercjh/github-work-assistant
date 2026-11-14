@@ -2,7 +2,7 @@
 
 把你关注的 GitHub Issue、PR、评审和 CI 变化送到 Raft，由工作频道中的执行 Agent 竞争认领，按仓库委托检查、修复和合入 PR，汇报完成结果或需要决定的事项。默认关注公开仓库；私有仓库按配置启用。
 
-每人部署一套。程序使用你已有的 `gh` 登录采集事实，以独立 **External Agent** 身份为每个 PR/Issue 建立固定任务和讨论区；首次认领的 Agent 持续负责，并在同一台机器读取本地证据。后续事件追加到原讨论区，只有人工交接才更换负责人。程序不调用模型，模型和工作执行由 Raft 管理。
+每人部署一套。程序使用你已有的 `gh` 登录采集事实，以独立 **External Agent** 身份为每个 PR/Issue 建立固定任务和讨论区；首次认领的 Agent 持续负责，并在同一台机器读取本地证据。后续事件追加到原讨论区，只有人工交接才更换负责人。fork 项目还可配置独立频道，将同一 PR 的同步、测试、评审分配到不同任务和讨论区。程序不调用模型，模型和工作执行由 Raft 管理。
 
 ```mermaid
 flowchart LR
@@ -45,6 +45,7 @@ state/assistant/run serve
 - 快照和待发事件一起持久化。发送失败保留待发状态并退避重试；完整消息请求在首次发送前保存，重启后使用相同幂等键和内容重试。
 - 执行 Agent 读取事件前后差异、最新快照和既有处理记录，避免把重复通知当作新工作。Raft 接受消息与 Agent 完成处理分别记账。
 - 配置可信仓库指引和 `github_actions` 后，执行 Agent 可自主检查、修改、验证和合入 PR。持续授权范围内不逐次请求确认；合入前检查实时归属和 head/base，合入后核对结果。未配置的仓库默认只读，GitHub 写操作由执行者通过 `gh` 完成。见[仓库操作授权](docs/REPOSITORY-WORK.md)。
+- 每个 fork 可指定项目频道，同一 PR 关联独立的同步、测试、评审及自定义工作项。各任务分别检查实时负责人、接收更新，结果绑定提交与验证证明；代码写入仍遵循原锁和授权。见[按项目协作](docs/PROJECT-COLLABORATION.md)。
 - 持续维护有定制功能的 fork：配置上游和目标分支，每轮保留上游原始提交，测试其与当前目标的合并结果；同步 PR 的评审和检查仍由原负责人跟进。见[持续维护 fork](docs/FORK-MAINTENANCE.md)。
 - 新委托可通过 `request-work` 应用于已有事项，无须等新的 GitHub 活动，也不重放归档通知。
 
@@ -56,6 +57,7 @@ state/assistant/run serve
 | 选择数据库、配置云数据库连接、扩展持久化实现 | [存储配置与实现](docs/STORAGE.md) |
 | 让执行 Agent 处理通知和保存结果 | [Agent 工作说明](docs/AGENT-WORKFLOW.md) |
 | 配置 fork 维护、验证定制能力与恢复中断 | [持续维护 fork](docs/FORK-MAINTENANCE.md) |
+| 每个 fork 独立频道、同一 PR 多任务协作 | [项目协作](docs/PROJECT-COLLABORATION.md) |
 | 仓库操作范围与本地工作命令 | [仓库工作指引](docs/REPOSITORY-WORK.md) |
 | 已有 App 部署的 OAuth／HTTPS 接入 | [App 模式参考](docs/APP-MODE.md) |
 | 本次验证的范围和限制 | [部署验证](docs/SETUP-VALIDATION.md) |

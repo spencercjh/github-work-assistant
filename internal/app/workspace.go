@@ -149,7 +149,7 @@ func githubOriginMatches(remote, repo string) bool {
 // VerifyWorkspace checks the local evidence; it deliberately does not claim that project tests ran.
 // Run refresh-work-context first to check remote revisions, then execute the configured tests in Raft.
 func (s *Service) VerifyWorkspace(ctx context.Context, in WorkInput) (Workspace, error) {
-	if w, err := s.CheckWork(ctx, in); err != nil {
+	if w, err := s.checkWork(ctx, in, "inspect"); err != nil {
 		return Workspace{}, err
 	} else if w.Fork != nil {
 		return s.verifyForkWorkspace(ctx, w, in)

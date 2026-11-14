@@ -17,20 +17,22 @@ type TaskLink struct {
 	GuideVersion    string `json:"guide_version"`
 }
 type WorkContext struct {
-	CurrentEventID string            `json:"current_event_id"`
-	Fork           *ForkProgress     `json:"fork,omitempty"`
-	Event          Event             `json:"event"`
-	Snapshot       json.RawMessage   `json:"snapshot"`
-	CurrentVersion string            `json:"current_version"`
-	ObservedAt     int64             `json:"observed_at"`
-	Stale          bool              `json:"stale"`
-	Guide          RepositoryGuide   `json:"guide"`
-	Task           *TaskLink         `json:"task,omitempty"`
-	Discussion     *TaskDispatch     `json:"discussion,omitempty"`
-	TaskAuthority  string            `json:"task_authority"`
-	History        []json.RawMessage `json:"processed_history"`
+	Collaboration  *ForkCollaboration `json:"collaboration,omitempty"`
+	CurrentEventID string             `json:"current_event_id"`
+	Fork           *ForkProgress      `json:"fork,omitempty"`
+	Event          Event              `json:"event"`
+	Snapshot       json.RawMessage    `json:"snapshot"`
+	CurrentVersion string             `json:"current_version"`
+	ObservedAt     int64              `json:"observed_at"`
+	Stale          bool               `json:"stale"`
+	Guide          RepositoryGuide    `json:"guide"`
+	Task           *TaskLink          `json:"task,omitempty"`
+	Discussion     *TaskDispatch      `json:"discussion,omitempty"`
+	TaskAuthority  string             `json:"task_authority"`
+	History        []json.RawMessage  `json:"processed_history"`
 }
 type WorkInput struct {
+	BatchID         string `json:"batch_id,omitempty"`
 	Executor        string `json:"executor,omitempty"`
 	EventID         string `json:"event_id"`
 	EvidenceVersion string `json:"evidence_version"`
@@ -106,10 +108,22 @@ func (s *Service) WorkContext(ctx context.Context, id string) (WorkContext, erro
 		return w, err
 	}
 	w.Stale = w.CurrentVersion != w.Event.Version
-	if d, e := s.Store.Discussion(ctx, w.Event.Key); e == nil {
+	if d, e := s.Store.Discussion(ctx, s.Config.discussionResource(w.Event.Key)); e == nil {
 		w.Discussion = d.Task
 	} else if !errors.Is(e, ErrNotFound) {
 		return WorkContext{}, e
+	}
+	w.Collaboration, err = s.readCollaboration(ctx, w)
+	if err != nil {
+		return WorkContext{}, err
+	}
+	if s.Config.Project(w.Event.Key) {
+		w.Task = nil
+		if w.Discussion != nil {
+			if item := w.Collaboration.item(w.Discussion.MessageID); item != nil {
+				w.Task = item.Link
+			}
+		}
 	}
 	w.TaskAuthority = "Raft; task link and reports are agent-provided references. Read live Raft task state before creating, claiming or resuming work."
 
@@ -151,14 +165,30 @@ func (s *Service) RefreshWorkContext(ctx context.Context, id string) (WorkContex
 }
 
 func (s *Service) CheckWork(ctx context.Context, in WorkInput) (WorkContext, error) {
-	w, err := s.WorkContext(ctx, in.EventID)
+	return s.checkWork(ctx, in, "write")
+}
+
+func (s *Service) checkWork(ctx context.Context, in WorkInput, operation string) (WorkContext, error) {
+	w, err := s.WorkContextFor(ctx, in.EventID, in.BatchID, in.TaskID)
 	if err != nil {
 		return w, err
 	}
-	if err := s.checkWorkAuthority(ctx, w, in); err != nil {
+	if w.Fork != nil && w.Fork.Queue != nil && !slices.Contains([]string{"inspect", "report", "register", "review"}, operation) {
+		selected, e := s.Store.ForkProgress(ctx, w.Event.Key)
+		if e != nil {
+			return w, e
+		}
+		if w.Fork.BatchID != selected.BatchID {
+			return w, errors.New("the coordinator must select this batch before workspace or GitHub operations")
+		}
+	}
+	if err := s.checkWorkAuthority(ctx, &w, in, operation); err != nil {
 		return w, err
 	}
-	if w.Stale || in.EvidenceVersion != w.CurrentVersion {
+	// Project registration/revocation changes only collaboration scope. It can
+	// use an older accepted coordination receipt with current evidence, allowing
+	// the coordinator to revoke a deleted recipient that blocks pending delivery.
+	if (w.Stale && operation != "register") || in.EvidenceVersion != w.CurrentVersion {
 		return w, ErrStaleWork
 	}
 	return w, nil
@@ -166,8 +196,12 @@ func (s *Service) CheckWork(ctx context.Context, in WorkInput) (WorkContext, err
 
 // Evidence is checked separately: completed fork tests may tolerate only a
 // retry wake, but must still satisfy the same live authority and freshness.
-func (s *Service) checkWorkAuthority(ctx context.Context, w WorkContext, in WorkInput) error {
-	if err := s.VerifyClaim(ctx, in.EventID, in.Executor); err != nil {
+func (s *Service) checkWorkAuthority(ctx context.Context, w *WorkContext, in WorkInput, operation string) error {
+	if s.Config.Project(w.Event.Key) {
+		if err := s.authorizeProjectWork(ctx, w, in, operation); err != nil {
+			return err
+		}
+	} else if err := s.VerifyClaim(ctx, in.EventID, in.Executor); err != nil {
 		return err
 	}
 	if in.GuideVersion != w.Guide.Version || w.ObservedAt < time.Now().Add(-10*time.Minute).Unix() {
@@ -176,7 +210,7 @@ func (s *Service) checkWorkAuthority(ctx context.Context, w WorkContext, in Work
 	if !uuidRE.MatchString(in.TaskID) {
 		return errors.New("a real Raft task UUID is required")
 	}
-	if s.Config.SharedTasks() {
+	if s.Config.SharedTasksFor(w.Event.Key) {
 		if w.Guide.TaskTarget == "" {
 			return errors.New("repository task destination is not configured")
 		}
@@ -188,9 +222,12 @@ func (s *Service) checkWorkAuthority(ctx context.Context, w WorkContext, in Work
 }
 
 func (s *Service) LinkTask(ctx context.Context, in WorkInput) (TaskLink, error) {
-	w, err := s.CheckWork(ctx, in)
+	w, err := s.checkWork(ctx, in, "report")
 	if err != nil {
 		return TaskLink{}, err
+	}
+	if s.Config.Project(w.Event.Key) {
+		return s.linkProjectTask(ctx, w, in)
 	}
 	if w.Guide.TaskTarget == "" {
 		return TaskLink{}, errors.New("repository task destination is not configured")
@@ -215,7 +252,7 @@ func (s *Service) RecordWorkResult(ctx context.Context, in WorkResult) error {
 	if in.Outcome == "changes-ready" && w.Guide.Mode != "local-edit" {
 		return ErrWorkDenied
 	}
-	if in.Outcome == "needs-decision" && s.Config.SharedTasks() {
+	if in.Outcome == "needs-decision" && s.Config.SharedTasksFor(w.Event.Key) {
 		if err := s.verifyDecisionReport(ctx, w, in); err != nil {
 			return err
 		}

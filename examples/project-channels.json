@@ -1,0 +1,20 @@
+{
+  "raft_mode": "external",
+  "delivery_target": "#github-work",
+  "decision_maker": "@owner",
+  "poll_seconds": 600,
+  "forks": [
+    {
+      "id": "engine",
+      "channel": "#engine-work",
+      "upstream": { "repo": "upstream/engine", "branch": "main" },
+      "target": { "repo": "your-org/engine", "branch": "main" }
+    },
+    {
+      "id": "runtime",
+      "channel": "#runtime-work",
+      "upstream": { "repo": "upstream/runtime", "branch": "main" },
+      "target": { "repo": "your-org/runtime", "branch": "main" }
+    }
+  ]
+}

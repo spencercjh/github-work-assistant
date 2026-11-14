@@ -62,8 +62,16 @@ func (r *Raft) ExternalIdentity(ctx context.Context) (ExternalIdentity, error) {
 }
 
 func (r *Raft) sendExternal(ctx context.Context, ev Event) ([]byte, error) {
-	if r.Config.SharedTasks() {
-		return r.sendSharedTask(ctx, ev)
+	r = r.forResource(ev.Key)
+	if r.Config.SharedTasksFor(ev.Key) {
+		if _, err := r.projectParticipantPlan(ctx, ev); err != nil {
+			return nil, err
+		}
+		receipt, err := r.sendSharedTask(ctx, ev)
+		if err == nil {
+			err = r.sendProjectParticipants(ctx, ev)
+		}
+		return receipt, err
 	}
 	if !executorTargetRE.MatchString(r.Config.DeliveryTarget) || !idRE.MatchString(ev.ID) || !idRE.MatchString(ev.Version) {
 		return nil, errors.New("invalid external delivery configuration or event identity")

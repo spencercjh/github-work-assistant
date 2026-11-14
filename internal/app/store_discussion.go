@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github-raft-app/internal/database"
 )
@@ -19,6 +20,18 @@ type Discussion struct {
 }
 
 func discussionKey(resource string) string { return "discussion:" + hash([]byte(resource)) }
+
+// Project destinations have separate roots, while events and delivery guards
+// still belong to the original resource. Preserve adoption and unresolved-send
+// checks when an operator enables project mode or moves its channel.
+func discussionEventResource(scope string) string {
+	if strings.HasPrefix(scope, "fork:") {
+		if key, channel, ok := strings.Cut(scope, ":channel:"); ok && taskChannelRE.MatchString(channel) {
+			return key
+		}
+	}
+	return scope
+}
 
 func (s *Store) Discussion(ctx context.Context, resource string) (Discussion, error) {
 	var value string
@@ -52,7 +65,7 @@ func discussionCandidates(ctx context.Context, tx *database.Tx, resource, channe
 }
 
 func (s *Store) DiscussionCandidates(ctx context.Context, resource, channel string) ([]TaskDispatch, error) {
-	tx, err := s.db.BeginWrite(ctx, "resource:"+resource)
+	tx, err := s.db.BeginWrite(ctx, "resource:"+discussionEventResource(resource))
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +77,7 @@ func (s *Store) DiscussionCandidates(ctx context.Context, resource, channel stri
 // share ONE initial event and its frozen, idempotent task-creation request. No
 // database transaction is held during a network call.
 func (s *Store) PrepareDiscussion(ctx context.Context, resource string, proposed Discussion, adopt string) (Discussion, error) {
-	tx, err := s.db.BeginWrite(ctx, "resource:"+resource)
+	tx, err := s.db.BeginWrite(ctx, "resource:"+discussionEventResource(resource))
 	if err != nil {
 		return Discussion{}, err
 	}
@@ -85,13 +98,13 @@ func (s *Store) PrepareDiscussion(ctx context.Context, resource string, proposed
 		return Discussion{}, err
 	}
 	var unresolved int64
-	if err := tx.Session(ctx).Raw(`SELECT COUNT(*) FROM ghraft_events e JOIN ghraft_meta m ON SUBSTR(m.name, 19) = e.event_id WHERE m.name LIKE ? AND e.resource_key = ? AND e.state = ?`, "external-delivery:%", resource, "pending").Scan(&unresolved).Error; err != nil {
+	if err := tx.Session(ctx).Raw(`SELECT COUNT(*) FROM ghraft_events e JOIN ghraft_meta m ON SUBSTR(m.name, 19) = e.event_id WHERE m.name LIKE ? AND e.resource_key = ? AND e.state = ?`, "external-delivery:%", discussionEventResource(resource), "pending").Scan(&unresolved).Error; err != nil {
 		return Discussion{}, err
 	}
 	if unresolved > 0 {
 		return Discussion{}, errors.New("unresolved legacy delivery; reconcile it with the previous version before adopting a discussion")
 	}
-	candidates, err := discussionCandidates(ctx, tx, resource, proposed.Channel)
+	candidates, err := discussionCandidates(ctx, tx, discussionEventResource(resource), proposed.Channel)
 	if err != nil {
 		return Discussion{}, err
 	}
@@ -123,7 +136,7 @@ func (s *Store) ConfirmDiscussion(ctx context.Context, resource string, expected
 	if !task.valid() || task.Channel != expected.Channel {
 		return errors.New("invalid discussion receipt")
 	}
-	tx, err := s.db.BeginWrite(ctx, "resource:"+resource)
+	tx, err := s.db.BeginWrite(ctx, "resource:"+discussionEventResource(resource))
 	if err != nil {
 		return err
 	}

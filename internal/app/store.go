@@ -233,7 +233,7 @@ func (s *Store) Delivery(ctx context.Context, id string, receipt []byte, success
 		}
 		err = tx.Session(ctx).Model(&eventRecord{}).Where("event_id = ? AND state = ?", id, "pending").Updates(map[string]any{"state": "accepted", "receipt": string(receipt), "accepted_at": time.Now().Unix(), "attempts": gorm.Expr("attempts+1")}).Error
 		if err == nil {
-			err = tx.Session(ctx).Where("name = ?", "external-delivery:"+id).Delete(&metaRecord{}).Error
+			err = tx.Session(ctx).Where("name = ? OR name = ? OR name LIKE ?", "external-delivery:"+id, "participant-plan:"+id, "participant:"+id+":%").Delete(&metaRecord{}).Error
 		}
 	} else {
 		delay := min(3600, 30*(1<<min(attempts, 7)))

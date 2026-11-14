@@ -21,6 +21,8 @@ const (
 // proof. Heartbeats and terminal states are deliberately absent from snapshots:
 // they must not invalidate evidence or produce a notification on every tick.
 type ForkValidation struct {
+	Executor    string `json:"executor,omitempty"`
+	TaskID      string `json:"task_id,omitempty"`
 	ID          string `json:"id"`
 	Round       string `json:"round"`
 	Head        string `json:"head"`

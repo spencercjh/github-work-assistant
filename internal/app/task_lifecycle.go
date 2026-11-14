@@ -249,7 +249,7 @@ func (s *Service) ReconcileTaskCompletion(ctx context.Context) error {
 	var errs []error
 	for _, watch := range watches {
 		key := watch.Key()
-		if !s.watchConfigured(ctx, key) {
+		if !s.watchConfigured(ctx, key) || !s.Config.SharedTasksFor(key) {
 			continue
 		}
 		d, err := s.Store.Discussion(ctx, key)

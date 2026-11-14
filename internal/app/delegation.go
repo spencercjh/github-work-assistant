@@ -72,9 +72,18 @@ func (s *Service) CheckGitHubAction(ctx context.Context, in GitHubActionInput) (
 	if _, err := s.RefreshWorkContext(ctx, in.EventID); err != nil {
 		return result, err
 	}
-	w, err := s.CheckWork(ctx, in.WorkInput)
+	operation := "write"
+	if in.Action == "review" {
+		operation = "review"
+	}
+	w, err := s.checkWork(ctx, in.WorkInput, operation)
 	if err != nil {
 		return result, err
+	}
+	if s.Config.Project(w.Event.Key) && in.Action == "review" {
+		if err = s.requireIndependentReviewer(ctx, w, in.WorkInput); err != nil {
+			return result, err
+		}
 	}
 	if w.Task == nil || w.Task.TaskID != in.TaskID || w.Task.GuideVersion != in.GuideVersion || w.Task.EvidenceVersion != in.EvidenceVersion {
 		return result, ErrWorkDenied

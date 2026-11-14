@@ -1,0 +1,132 @@
+# 按 fork 项目协作
+
+同一安装可为每个 fork 配置一个工作频道。同一同步 PR 可关联多个任务，分别负责同步、测试、评审和其他调查。各任务有独立负责人和讨论区；助手保存关联、分发更新并核对提交版本。程序不调用模型，也不代替用户分派人员。
+
+本功能使用 External Agent 模式。所有执行者仍通过同一台机器上的本地 CLI 和数据库工作；不提供跨机器工作区调度或操作系统账号隔离。
+
+## 配置项目频道
+
+在已有实例的 `forks` 条目中设置 `channel`，例如：
+
+```json
+{
+  "raft_mode": "external",
+  "delivery_target": "#github-work",
+  "decision_maker": "@owner",
+  "poll_seconds": 600,
+  "forks": [
+    {
+      "id": "engine",
+      "channel": "#engine-work",
+      "upstream": { "repo": "upstream/engine", "branch": "main" },
+      "target": { "repo": "your-org/engine", "branch": "main" }
+    },
+    {
+      "id": "runtime",
+      "channel": "#runtime-work",
+      "upstream": { "repo": "upstream/runtime", "branch": "main" },
+      "target": { "repo": "your-org/runtime", "branch": "main" }
+    }
+  ]
+}
+```
+
+这是配置片段。完整身份、存储配置和各目标仓库的可信指引仍须按[快速部署](QUICKSTART.md)和[fork 维护](FORK-MAINTENANCE.md)准备。可合并的示例见 [`examples/project-channels.json`](../examples/project-channels.json)。
+
+`channel` 必须是顶层频道，不能是 DM 或 thread。采集身份须加入每个项目频道，配置的 `decision_maker` 须是这些频道的人类成员。用户管理参与者的频道成员资格及任务指派；`doctor` 核对采集身份和决策人的成员资格，不替用户添加成员。
+
+显式项目频道覆盖该 fork 的 `delivery_target` 和指引中的 `task_target`。普通 PR/Issue 及未配置 `channel` 的 fork 继续使用默认投递目标。只有关闭通知自动发现、没有普通关注对象且所有 fork 均配置了频道时，才能省略默认投递目标。设置频道不会改变 GitHub 授权或轮询频率；示例中的 600 秒需由部署者明确配置。
+
+私有项目的频道可见范围应由用户确认。项目路由不改变 `private_repositories` 的授权边界，通知仍遵守 `private_notification_details`。参与者通知只带状态和证据标识，不复制其他讨论区的报告正文。
+
+## 协调任务与工作项
+
+每个项目保留一个协调任务，用于处理事件、管理同步队列和关联工作项。协调者必须是该任务在 Raft 中实际登记的负责人，状态为 `in_progress`。各 PR 的工作项使用项目频道内已有的顶层任务，自己的 thread 用于讨论和报告。
+
+| 工作项 | 允许的操作 | 限制 |
+| --- | --- | --- |
+| 协调任务 | 选择批次、重建、恢复、关联或撤销工作项 | 有有效 `sync` 工作项后，协调者不能同时执行该批的代码写入操作 |
+| `sync` | 准备同步工作区、保存维护结果、运行获准的 GitHub 操作检查、运行完整验证 | 每批最多一个有效同步工作项；仍受可信仓库指引限制 |
+| `test` | 读取、运行 `test-worktree`、提交自己的测试结果 | 不授予推送、合并或源工作区修改权限 |
+| `review` | 读取、提交评审结果；指引已委托 `review` 时检查该 PR 的 GitHub review 操作 | 必须独立于当前及已记录的同步、协调执行者；不授予合并权限 |
+| 自定义名称 | 读取、调查、提交结果 | 不授予源工作区、验证执行器或 GitHub 写权限 |
+
+工作项类型使用小写字母开头，可含小写字母、数字和连字符，最多 40 个字符。每批最多保留 32 个工作项，包括协调关联和已撤销项。类型不可修改；撤销后不能恢复，需关联新的任务。一项参与者任务只能属于一个 PR/批次，避免复用任务导致旧版本结果或权限被带入另一 PR。
+
+同一 PR 可有多个评审或调查任务。参与者可以并行阅读和整理报告；程序对实际工作区操作仍使用现有锁，完整验证仍使用临时合并工作区和原有的来源、映射、目标及指引校验。
+
+## 关联参与者任务
+
+先由用户创建并指定协调者和参与者任务。参与者读取自己的任务讨论，使用自己的身份认领。协调者读取已确认投递的当前事件，再关联参与者任务：
+
+```bash
+RUN=/absolute/path/to/instance/run
+# 从当前 work-context 读取这组值；不要使用历史截图中的值。
+coord=(--event "$EVENT_ID" --executor "$COORDINATOR"
+       --version "$EVIDENCE_VERSION" --guide "$GUIDE_VERSION"
+       --task "$COORDINATOR_TASK_UUID")
+
+"$RUN" register-work-item "${coord[@]}" \
+  --participant-task "$SYNC_TASK_UUID" --kind sync
+"$RUN" register-work-item "${coord[@]}" \
+  --participant-task "$TEST_TASK_UUID" --kind test
+"$RUN" register-work-item "${coord[@]}" \
+  --participant-task "$REVIEW_TASK_UUID" --kind review
+```
+
+关联会核对任务实际存在于项目频道，但不会认领、改派或改变任务状态。任务未开始或负责人不匹配时，参与者不能执行。旧负责人在人工交接后立即失去执行资格；撤销工作项也会停止该任务的执行资格。
+
+协调者可在关联命令加 `--batch <batch_id>`，为队列中另一批关联任务。默认使用当前选中的批次。批次重建保留 `batch_id`，因此关联任务继续适用；重建产生的新轮次不会继承旧测试或评审结果的有效状态。
+
+## 参与者读取与报告
+
+参与者用自己的任务 UUID 读取上下文。程序据此找到对应批次，无须切换同步工作区：
+
+```bash
+"$RUN" work-context --event "$EVENT_ID" --task "$MY_TASK_UUID"
+"$RUN" verify-claim --event "$EVENT_ID" --task "$MY_TASK_UUID" --executor "$MY_HANDLE"
+
+work=(--event "$EVENT_ID" --executor "$MY_HANDLE"
+      --version "$EVIDENCE_VERSION" --guide "$GUIDE_VERSION"
+      --task "$MY_TASK_UUID")
+"$RUN" link-task "${work[@]}"
+```
+
+`work-context.collaboration.items` 包含各工作项的任务、自己的证据关联和最近结果。`work-context.task` 随 `--task` 返回该任务的关联，不覆盖其他参与者。当前事件尚未送达、证据过期或任务归属变化时，停止操作，刷新上下文并处理具体错误。
+
+测试执行者按原可信配置运行 `test-worktree`。实际源工作区操作和完整验证要求该批次是协调者选中的批次；评审、读取、关联和报告可处理其他排队 PR，不改变当前选择。队列选择不会自动中断正在运行的验证。
+
+报告先通过 `raft message send` 发布到自己任务的 thread，再使用其完整消息 UUID：
+
+```bash
+"$RUN" record-contribution "${work[@]}" \
+  --report "$REPORT_UUID" --outcome approved \
+  --head "$REVIEWED_HEAD" --base "$REVIEWED_TARGET" \
+  --summary-file /absolute/path/to/review-summary.md
+```
+
+支持的结果为 `investigated`、`waiting`、`passed`、`failed`、`approved`、`changes-requested`。`passed`/`failed` 仅供 `test` 工作项使用，`approved`/`changes-requested` 仅供 `review` 使用。助手核对报告确实由当前执行者发在自己的任务讨论区，结果与当时的轮次、head、目标提交、文件树、映射和指引绑定。
+
+`passed` 还须绑定该任务、该执行者实际完成的验证尝试。`approved` 需要当前完整验证证明，且评审者不能是本批同步或协调的执行者。交接或撤销同步任务不会抹除已记录的执行者身份。
+
+`result.current=true` 表示结果仍匹配最新采集状态和保存的完整证明，不是永久授权，也不表示读取了尚未采集的 GitHub 变化或未提交的本地修改。目标、提交、映射、指引或验证尝试变化后，应按最新上下文判断是否需要重新验证或审查。该记录不替代 GitHub/Stamp 审批、仓库保护规则或合并检查。发布 review 仍需单独的 `review` 委托及 `check-github-action --action review`；其他写操作不会因加入评审任务而开放。
+
+协调者继续使用 `record-work-result` 记录维护结果；若已委托 `sync` 工作项，由同步执行者记录该批维护结果。参与者的调查结果不会推进同步完成位置或将失败验证变成通过。
+
+## 更新投递与恢复
+
+GitHub 变化先追加到项目协调讨论，再发送到受影响批次的参与者 thread。关联、撤销和报告也会生成明确标记的本地协作更新；报告作者不会因自己的报告再次收到参与者通知。报告正文留在原 thread，其他参与者沿结果引用读取。
+
+发送前固定接收任务列表。每个接收者保存独立请求和回执；部分失败或进程重启后复用原内容和幂等键。只有全部仍有效的接收者确认后，事件才记为 `accepted`。已经完成的任务收到更新不会自动重开；冻结后撤销的任务停止后续投递；已发出的通知可能仍可见，但执行检查按最新撤销状态拒绝操作。
+
+请求结果不明且超过 23 小时的安全重试窗口时，停止重发并核对原消息。任务被删除而使投递阻塞时，协调者可用旧的已送达事件作为协调回执，读取并传入当前证据和指引版本，显式撤销该工作项后重试投递。这个例外只用于关联管理，不允许旧事件执行代码操作。采集身份失去频道权限或保存的发送身份不匹配时，保留错误，先恢复或核对原投递，不另建替代任务绕过问题。
+
+## 已有实例切换
+
+切换前，先让执行者停止新写入，等待当前验证保存结果，并处理完旧目标的待投递事件。保存配置、数据库和原二进制备份。
+
+由部署者升级程序并修改 `forks[].channel`，核对新频道的成员，更新实例的 `EXECUTOR.md`。运行 `check-config` 和 `doctor` 后，再通过一个明确的 `request-work` 请求触发新目标的投递，并核对实际收到的协调任务。仅替换程序不会改写配置、自动移动消息或恢复被用户暂停的工作。
+
+同一频道启用项目协作时会复用原协调任务；若已有多个历史任务，需由部署者用 `adopt-discussion` 明确选择。频道改变后，新频道建立自己的协调关联，旧讨论和报告保留。旧任务回执不再授予新频道的执行权，参与者须在新频道重新关联。频道配置属于指引版本，旧证明必须按新版本要求重新验证后才能用于写入。未完成的旧投递不得直接改道，应先按原配置完成或核对；移除 `channel` 也不会把参与者权限自动迁入默认任务。
+
+协作状态和引用保存在现有数据库中，不需要新的数据表。报告正文沿用历史保留规则；任务关联、版本及发送幂等记录与数据库一起备份。部署者应在实际项目频道验证一次接收和分工流程；本地合成回归不代替真实账号验收。
