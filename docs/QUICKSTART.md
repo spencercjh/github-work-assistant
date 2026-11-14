@@ -219,3 +219,7 @@ state/assistant/run doctor
 ## 委托自主处理 PR
 
 安装默认只读。需要执行者持续完成 PR 检查和合入时，在安装目录的 `config.json` 中配置 `repositories`、`github_actions` 和可信的本地指引，然后重启服务。动作列表和指引共同表达用户的长期委托，范围内不需要逐次确认。示例与合入前检查见[仓库工作指引](REPOSITORY-WORK.md)。已有事项可用 `request-work` 请求重新评估；不要清空历史或通知游标。
+
+## 每个 fork 使用独立频道
+
+在 `forks` 条目设置 `channel` 可为项目独立路由，并为一个 PR 关联多个执行者的任务与讨论区。全局工作频道保留给普通 PR/Issue。部署前按[项目协作说明](PROJECT-COLLABORATION.md)核对成员、任务关联和已有实例切换步骤。

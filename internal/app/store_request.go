@@ -45,7 +45,8 @@ func (s *Store) RequestWork(ctx context.Context, key, version, requestID, reason
 	if private == "true" {
 		classification = "private"
 	}
-	payload := canonical(map[string]any{"event_id": id, "resource_key": key, "version": version, "data_classification": classification, "subject": subjectOf(snapshot), "kind": "work.requested", "request_id": requestID, "reason": reason, "changes": []Change{}})
+	batch, pr := snapshotPRScope(snapshot)
+	payload := canonical(map[string]any{"event_id": id, "resource_key": key, "version": version, "data_classification": classification, "subject": subjectOf(snapshot), "kind": "work.requested", "request_id": requestID, "reason": reason, "fork_batch": batch, "fork_pr": pr, "changes": []Change{}})
 	row := eventRecord{EventID: id, ResourceKey: key, VersionHash: version, Payload: string(payload), State: "pending", CreatedAt: time.Now().Unix()}
 	if err = tx.Session(ctx).Create(&row).Error; err != nil {
 		return Event{}, err

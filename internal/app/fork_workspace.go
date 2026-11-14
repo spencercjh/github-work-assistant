@@ -260,7 +260,7 @@ type WorkspaceTest struct {
 // Test commands come only from the trusted local guide. Tests still execute
 // repository code: this is a credential-reduced process, not an OS sandbox.
 func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result WorkspaceTest, retErr error) {
-	w, err := s.CheckWork(ctx, in)
+	w, err := s.checkWork(ctx, in, "test")
 	if err != nil {
 		return result, err
 	}
@@ -315,7 +315,7 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	p.ValidatedHead, p.ValidatedBase, p.ValidatedTree, p.ValidatedGuide, p.TestLog, p.TestLogHash = "", "", "", "", "", ""
 	p.ValidatedMapping, p.ValidatedPRSection = "", ""
 	now := time.Now()
-	p.Validation = &ForkValidation{ID: result.Attempt, Round: p.Round, Head: result.Head, Base: result.Base, Guide: in.GuideVersion, Log: result.Log, State: "running", StartedAt: now.Unix(), HeartbeatAt: now.Unix(), Deadline: now.Add(forkTestTimeout + forkTestLease).Unix()}
+	p.Validation = &ForkValidation{Executor: in.Executor, TaskID: in.TaskID, ID: result.Attempt, Round: p.Round, Head: result.Head, Base: result.Base, Guide: in.GuideVersion, Log: result.Log, State: "running", StartedAt: now.Unix(), HeartbeatAt: now.Unix(), Deadline: now.Add(forkTestTimeout + forkTestLease).Unix()}
 	// Starting validation resumes execution, even after an earlier review wait.
 	p.Phase, p.NextAttempt = "working", p.Validation.Deadline
 	if err = s.Store.SaveForkProgress(ctx, w.Event.Key, p.Revision, p, nil); err != nil {
@@ -427,7 +427,7 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	if err != nil {
 		return result, err
 	}
-	if err = s.checkWorkAuthority(ctx, w, in); err != nil {
+	if err = s.checkWorkAuthority(ctx, &w, in, "test"); err != nil {
 		return result, err
 	}
 	if !forkTestEvidenceMatches(testedSnapshot, w.Snapshot) {

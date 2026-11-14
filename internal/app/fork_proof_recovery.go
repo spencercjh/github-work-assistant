@@ -141,7 +141,7 @@ func requireForkProofRecovery(w WorkContext, in WorkInput, f ForkSpec) error {
 
 func (s *Service) RecoverForkProof(ctx context.Context, in WorkInput) (ForkProofRecoveryReceipt, error) {
 	var empty ForkProofRecoveryReceipt
-	w, err := s.CheckWork(ctx, in)
+	w, err := s.checkWork(ctx, in, "coordinate")
 	if err != nil {
 		return empty, err
 	}
@@ -225,7 +225,7 @@ func (s *Service) RecoverForkProof(ctx context.Context, in WorkInput) (ForkProof
 	}
 	// The collector does not mutate progress. Recheck task ownership and evidence
 	// after network/file reads, then fence concurrent writers in the transaction.
-	latest, err := s.CheckWork(ctx, in)
+	latest, err := s.checkWork(ctx, in, "coordinate")
 	if err != nil {
 		return empty, err
 	}

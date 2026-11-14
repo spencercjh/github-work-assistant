@@ -74,7 +74,7 @@ func (s *Service) StartForkBatch(ctx context.Context, in ForkBatchInput) (ForkPr
 	if _, err := s.RefreshWorkContext(ctx, in.EventID); err != nil {
 		return ForkProgress{}, err
 	}
-	w, err := s.CheckWork(ctx, in.WorkInput)
+	w, err := s.checkWork(ctx, in.WorkInput, "coordinate")
 	if err != nil {
 		return ForkProgress{}, err
 	}
@@ -143,7 +143,7 @@ func (s *Service) StartForkBatch(ctx context.Context, in ForkBatchInput) (ForkPr
 	}
 	o := ForkObservation{Classification: snapshot.Classification, Upstream: p.ObservedUpstream, Target: target, ContainsPinned: contains, Objects: Objects{}}
 	// Recheck current ownership, policy and the input snapshot after local work.
-	fresh, err := s.CheckWork(ctx, in.WorkInput)
+	fresh, err := s.checkWork(ctx, in.WorkInput, "coordinate")
 	if err != nil {
 		return p, err
 	}

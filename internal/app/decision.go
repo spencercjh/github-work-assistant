@@ -24,7 +24,7 @@ func (s *Service) verifyDecisionReport(ctx context.Context, w WorkContext, in Wo
 	if err != nil {
 		return err
 	}
-	if err := s.Raft.CheckTaskChannel(ctx); err != nil {
+	if err := s.Raft.checkTaskChannel(ctx, root.Channel); err != nil {
 		return err
 	}
 	query := url.Values{"channel": {root.target()}, "around": {in.ReportID}, "limit": {"10"}, "consume": {"false"}}

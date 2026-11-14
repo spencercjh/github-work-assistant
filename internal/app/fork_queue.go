@@ -388,7 +388,7 @@ func (s *Service) queueContext(ctx context.Context, in WorkInput) (WorkContext, 
 	if _, err := s.RefreshWorkContext(ctx, in.EventID); err != nil {
 		return WorkContext{}, ForkSpec{}, err
 	}
-	w, err := s.CheckWork(ctx, in)
+	w, err := s.checkWork(ctx, in, "coordinate")
 	if err != nil {
 		return w, ForkSpec{}, err
 	}
@@ -592,7 +592,7 @@ func (s *Service) startQueuedForkBatch(ctx context.Context, in ForkBatchInput, w
 	}
 	o := ForkObservation{Classification: snap.Classification, Upstream: p.ObservedUpstream, Target: target, IntegrationTarget: integration, Objects: Objects{}}
 	q.Batches = append(q.Batches, ForkQueuedBatch{Progress: unqueuedProgress(next), Observation: o})
-	if _, err = s.CheckWork(ctx, in.WorkInput); err != nil {
+	if _, err = s.checkWork(ctx, in.WorkInput, "coordinate"); err != nil {
 		return p, err
 	}
 	if err = s.Store.StartForkBatch(ctx, f, *w.Fork, next, o, in.EvidenceVersion); err != nil {

@@ -311,7 +311,7 @@ func (s *Service) RestartFork(ctx context.Context, in WorkInput) (ForkProgress, 
 	if _, err := s.RefreshWorkContext(ctx, in.EventID); err != nil {
 		return ForkProgress{}, err
 	}
-	w, err := s.CheckWork(ctx, in)
+	w, err := s.checkWork(ctx, in, "coordinate")
 	if err != nil {
 		return ForkProgress{}, err
 	}

@@ -101,7 +101,7 @@ func run() error {
 		secret = string(b)
 	}
 	raft := &app.Raft{Config: c, Secret: secret, HTTP: app.SafeHTTP(), Store: store}
-	needsClaim := c.SharedTasks() && (command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync" || command == "start-sync-batch" || command == "select-sync-batch" || command == "rebuild-sync-batch" || command == "recover-fork-proof")
+	needsClaim := c.SharedTasks() && (command == "register-work-item" || command == "revoke-work-item" || command == "record-contribution" || command == "finish-work" || command == "verify-claim" || command == "record-triage" || command == "link-task" || command == "record-work-result" || command == "prepare-worktree" || command == "verify-worktree" || command == "check-github-action" || command == "test-worktree" || command == "restart-sync" || command == "start-sync-batch" || command == "select-sync-batch" || command == "rebuild-sync-batch" || command == "recover-fork-proof")
 	if c.RaftMode == "external" && (command == "doctor" || command == "serve" || command == "deliver" || command == "adopt-discussion" || needsClaim) {
 		b, err := readSecret("GHRAFT_RAFT_TOKEN_FILE", c.PrivateFile("raft-token"))
 		if err != nil {
@@ -160,7 +160,7 @@ func run() error {
 			return e
 		}
 		return err
-	case "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync", "start-sync-batch", "select-sync-batch", "rebuild-sync-batch", "recover-fork-proof":
+	case "register-work-item", "revoke-work-item", "record-contribution", "finish-work", "verify-claim", "work-context", "refresh-work-context", "link-task", "record-work-result", "prepare-worktree", "verify-worktree", "discussion-candidates", "adopt-discussion", "check-github-action", "request-work", "test-worktree", "restart-sync", "start-sync-batch", "select-sync-batch", "rebuild-sync-batch", "recover-fork-proof":
 		return workCommand(ctx, svc, command, flags.Args()[1:])
 	case "import-legacy":
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, 64<<20))
@@ -234,7 +234,7 @@ func run() error {
 		}
 		return e
 	default:
-		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work, test-worktree, restart-sync, start-sync-batch, select-sync-batch, rebuild-sync-batch, finish-work")
+		return errors.New("commands: init, version, check-config, doctor, manifest, migrate, collect, events, status, pending, register-work-item, revoke-work-item, record-contribution, record-triage, authorize-events, deliver, serve, verify-claim, work-context, refresh-work-context, link-task, record-work-result, prepare-worktree, verify-worktree, discussion-candidates, adopt-discussion, check-github-action, request-work, test-worktree, restart-sync, start-sync-batch, select-sync-batch, rebuild-sync-batch, finish-work")
 	}
 }
 
@@ -246,7 +246,9 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	f.StringVar(&in.EvidenceVersion, "version", "", "Current evidence version")
 	f.StringVar(&in.GuideVersion, "guide", "", "Current guide version")
 	f.StringVar(&in.TaskID, "task", "", "Existing claimed Raft task root UUID")
-	batch := f.String("batch", "", "Exact queue batch ID for selection or rebuild")
+	participant := f.String("participant-task", "", "Existing participant task root UUID in the project channel")
+	kind := f.String("kind", "", "Work kind: sync, test, review, or a custom investigation kind")
+	batch := f.String("batch", "", "Exact batch ID for selection, rebuild, collaboration or context")
 	after := f.String("after", "", "First batch baseline SHA; later batches resume the verified cursor")
 	count := f.Int("count", 1, "Number of oldest next upstream first-parent commits, 1..50")
 	repository := f.String("repo", "", "Existing local clone with the authorized GitHub origin")
@@ -272,9 +274,21 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	if f.NArg() != 0 {
 		return errors.New("unexpected work command arguments")
 	}
+	if command != "select-sync-batch" && command != "rebuild-sync-batch" {
+		in.BatchID = *batch
+	}
 	var result any
 	var err error
 	switch command {
+	case "register-work-item", "revoke-work-item":
+		result, err = svc.RegisterForkWorkItem(ctx, app.ForkWorkItemInput{WorkInput: in, ParticipantTask: *participant, Kind: *kind, Revoke: command == "revoke-work-item"})
+	case "record-contribution":
+		var summary []byte
+		summary, err = os.ReadFile(*summaryFile)
+		if err == nil {
+			err = svc.RecordContribution(ctx, app.ContributionInput{WorkInput: in, ReportID: *report, Outcome: *outcome, Summary: string(summary), Head: *head, Base: *base})
+			result = map[string]bool{"recorded": err == nil}
+		}
 	case "recover-fork-proof":
 		result, err = svc.RecoverForkProof(ctx, in)
 	case "request-work":
@@ -321,22 +335,24 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 		var w app.WorkContext
 		w, err = svc.WorkContext(ctx, in.EventID)
 		if err == nil {
-			result, err = svc.Store.DiscussionCandidates(ctx, w.Event.Key, svc.Config.DeliveryTarget)
+			result, err = svc.Store.DiscussionCandidates(ctx, w.Event.Key, svc.Config.DeliveryTargetFor(w.Event.Key))
 		}
 	case "verify-claim":
 		if !svc.Config.SharedTasks() {
 			return errors.New("verify-claim requires shared task delivery")
 		}
-		err = svc.VerifyClaim(ctx, in.EventID, in.Executor)
+		err = svc.VerifyWorkItemClaim(ctx, in)
 		if errors.Is(err, app.ErrClaimUnavailable) {
 			result, err = map[string]any{"execute": false, "reason": "already_owned_or_finished"}, nil
 		} else if err == nil {
 			result = map[string]bool{"execute": true}
 		}
 	case "work-context":
-		result, err = svc.WorkContext(ctx, in.EventID)
+		result, err = svc.WorkContextFor(ctx, in.EventID, in.BatchID, in.TaskID)
 	case "refresh-work-context":
-		result, err = svc.RefreshWorkContext(ctx, in.EventID)
+		if _, err = svc.RefreshWorkContext(ctx, in.EventID); err == nil {
+			result, err = svc.WorkContextFor(ctx, in.EventID, in.BatchID, in.TaskID)
+		}
 	case "link-task":
 		result, err = svc.LinkTask(ctx, in)
 	case "record-work-result":

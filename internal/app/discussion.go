@@ -18,6 +18,7 @@ func (r *Raft) discussionProposal(ctx context.Context, eventID string) (Discussi
 }
 
 func (r *Raft) sendSharedTask(ctx context.Context, ev Event) ([]byte, error) {
+	r = r.forResource(ev.Key)
 	if err := r.Config.ValidateDeliveryTarget(); err != nil {
 		return nil, err
 	}
@@ -39,7 +40,7 @@ func (r *Raft) sendSharedTask(ctx context.Context, ev Event) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, err := r.Store.PrepareDiscussion(ctx, ev.Key, proposal, "")
+	d, err := r.Store.PrepareDiscussion(ctx, r.Config.discussionResource(ev.Key), proposal, "")
 	if err != nil {
 		return nil, err
 	}
@@ -56,13 +57,18 @@ func (r *Raft) sendSharedTask(ctx context.Context, ev Event) ([]byte, error) {
 		if json.Unmarshal(receipt, &root) != nil || !root.valid() {
 			return nil, errors.New("invalid fixed task receipt")
 		}
-		if err = r.Store.ConfirmDiscussion(ctx, ev.Key, d, root); err != nil {
+		if err = r.Store.ConfirmDiscussion(ctx, r.Config.discussionResource(ev.Key), d, root); err != nil {
 			return nil, err
 		}
 		// Another event can finish the first event's interrupted delivery. Record
 		// its receipt now so the first event cannot later be sent as a new reply.
-		if err = r.Store.Delivery(ctx, first.ID, receipt, true, 0); err != nil {
-			return nil, err
+		if first.ID != ev.ID {
+			if err = r.sendProjectParticipants(ctx, first); err != nil {
+				return nil, err
+			}
+			if err = r.Store.Delivery(ctx, first.ID, receipt, true, 0); err != nil {
+				return nil, err
+			}
 		}
 		d.Task = &root
 	}
@@ -125,6 +131,9 @@ func (r *Raft) appendDiscussion(ctx context.Context, ev Event, root TaskDispatch
 		instruction = "继续由原负责人处理；先确认原任务仍归自己且为 in_progress，再核验 verify-claim。其他执行者静默结束，不另建任务。"
 	default:
 		return nil, errors.New("unknown fixed task status")
+	}
+	if r.Config.Project(ev.Key) && state.Status == "in_progress" {
+		instruction = "由本任务负责人协调项目、维护队列和关联工作项。已登记的参与者在各自任务及 thread 工作，使用各自 --task 核验归属；不要争抢协调任务或重复其他人的工作。读取 collaboration 中已绑定当前提交的结果后再安排下一步。"
 	}
 	if state.OwnerType == "user" {
 		instruction = "原任务由人类负责，Agent 不代为认领；需要执行时由用户明确交接原任务。"
@@ -201,7 +210,7 @@ func (s *Service) AdoptDiscussion(ctx context.Context, eventID, rootID string) (
 	if err != nil {
 		return Discussion{}, err
 	}
-	candidates, err := s.Store.DiscussionCandidates(ctx, w.Event.Key, s.Config.DeliveryTarget)
+	candidates, err := s.Store.DiscussionCandidates(ctx, w.Event.Key, s.Config.DeliveryTargetFor(w.Event.Key))
 	if err != nil {
 		return Discussion{}, err
 	}
@@ -212,11 +221,11 @@ func (s *Service) AdoptDiscussion(ctx context.Context, eventID, rootID string) (
 		if _, err = s.Raft.readTask(ctx, task.Channel, task.Number, task.MessageID); err != nil {
 			return Discussion{}, err
 		}
-		proposal, err := s.Raft.discussionProposal(ctx, eventID)
+		proposal, err := s.Raft.forResource(w.Event.Key).discussionProposal(ctx, eventID)
 		if err != nil {
 			return Discussion{}, err
 		}
-		return s.Store.PrepareDiscussion(ctx, w.Event.Key, proposal, rootID)
+		return s.Store.PrepareDiscussion(ctx, s.Config.discussionResource(w.Event.Key), proposal, rootID)
 	}
 	return Discussion{}, errors.New("selected task does not belong to this resource")
 }
