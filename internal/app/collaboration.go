@@ -24,6 +24,7 @@ type ForkWorkItem struct {
 	Actors       []string               `json:"executors,omitempty"`
 	Revoked      bool                   `json:"revoked,omitempty"`
 	PRDiscussion bool                   `json:"pr_discussion,omitempty"`
+	PR           int                    `json:"pr,omitempty"`
 	Link         *TaskLink              `json:"link,omitempty"`
 	Result       *ContributionReference `json:"result,omitempty"`
 }
@@ -95,7 +96,7 @@ func (s *Service) readCollaboration(ctx context.Context, w WorkContext) (*ForkCo
 	}
 	for i := range c.Items {
 		if result := c.Items[i].Result; result != nil {
-			result.Current = !c.Items[i].Revoked && contributionCurrent(w, *result)
+			result.Current = !c.Items[i].Revoked && (!c.Items[i].PRDiscussion || c.Items[i].PR == w.Fork.PR) && contributionCurrent(w, *result)
 		}
 	}
 	return &c, nil
@@ -213,6 +214,9 @@ func (s *Service) authorizeProjectWork(ctx context.Context, w *WorkContext, in W
 	}
 	item := w.Collaboration.item(in.TaskID)
 	if item == nil || item.Revoked || operation == "coordinate" || operation == "register" {
+		return ErrWorkDenied
+	}
+	if item.PRDiscussion && (w.Fork == nil || item.PR != w.Fork.PR) {
 		return ErrWorkDenied
 	}
 	if operation == "write" && item.Kind != "sync" || operation == "test" && item.Kind != "test" && item.Kind != "sync" || operation == "review" && item.Kind != "review" {

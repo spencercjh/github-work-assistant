@@ -45,6 +45,8 @@ func (r *Raft) projectParticipantPlan(ctx context.Context, ev Event) ([]particip
 		CollaborationID string   `json:"collaboration_id"`
 		OriginTask      string   `json:"origin_task"`
 		Classification  string   `json:"data_classification"`
+		ForkBatch       string   `json:"fork_batch"`
+		ForkPR          int      `json:"fork_pr"`
 		Changes         []Change `json:"changes"`
 	}
 	if err = json.Unmarshal(ev.Payload, &payload); err != nil {
@@ -76,13 +78,22 @@ func (r *Raft) projectParticipantPlan(ctx context.Context, ev Event) ([]particip
 			}
 		}
 	}
+	if idRE.MatchString(payload.ForkBatch) {
+		found := false
+		for _, batch := range batches {
+			found = found || collaborationID(&batch) == payload.ForkBatch
+		}
+		if !found {
+			batches = append(batches, ForkProgress{BatchID: payload.ForkBatch, PR: payload.ForkPR})
+		}
+	}
 	recipients := []participantRecipient{}
 	for _, batch := range batches {
 		id := collaborationID(&batch)
 		if !idRE.MatchString(id) {
 			continue
 		}
-		affected := p.Queue == nil || len(payload.Changes) == 0 && batch.BatchID == p.BatchID
+		affected := p.Queue == nil || len(payload.Changes) == 0 && id == payload.ForkBatch
 		if payload.CollaborationID != "" {
 			affected = payload.CollaborationID == id
 		} else {
@@ -103,7 +114,34 @@ func (r *Raft) projectParticipantPlan(ctx context.Context, ev Event) ([]particip
 			if item.Revoked || item.Kind == "coordinate" || item.Task.MessageID == payload.OriginTask {
 				continue
 			}
-			recipients = append(recipients, participantRecipient{item.Task, item.Kind, batch.PR, payload.Classification == "private" && !r.Config.PrivateNotificationDetails, item.PRDiscussion})
+			pr := batch.PR
+			if item.PRDiscussion {
+				// Use the PR observed by this event, never the current PR occupying
+				// the batch. A queued old event must not reach a replacement PR.
+				matches, hasChange := false, false
+				for _, change := range payload.Changes {
+					if change.Object != "queue:"+id && change.Object != "fork" {
+						continue
+					}
+					for _, value := range []any{change.Before, change.After} {
+						facts := obj(value)
+						if change.Object == "fork" && str(facts["round"]) != id && str(facts["batch_id"]) != id {
+							continue
+						}
+						number, present := facts["pr"].(float64)
+						hasChange = hasChange || present
+						matches = matches || present && int(number) == item.PR
+					}
+				}
+				if !hasChange {
+					matches = payload.ForkBatch == id && payload.ForkPR == item.PR
+				}
+				if item.PR <= 0 || !matches {
+					continue
+				}
+				pr = item.PR
+			}
+			recipients = append(recipients, participantRecipient{item.Task, item.Kind, pr, payload.Classification == "private" && !r.Config.PrivateNotificationDetails, item.PRDiscussion})
 		}
 	}
 	return r.Store.PrepareParticipantPlan(ctx, ev.ID, recipients)

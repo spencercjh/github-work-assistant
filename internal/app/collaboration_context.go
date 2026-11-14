@@ -14,6 +14,11 @@ func (s *Service) WorkContextFor(ctx context.Context, event, batch, task string)
 		if err == nil && s.Config.Project(w.Event.Key) && task != "" {
 			w.Task = nil
 			if item := w.Collaboration.item(task); item != nil {
+				if item.PRDiscussion && (w.Fork == nil || w.Fork.PR != item.PR) {
+					w = WorkContext{}
+					err = errors.New("this task belongs to a previous PR; read its original discussion and use the replacement PR's own task")
+					return
+				}
 				w.Task = item.Link
 			}
 		}

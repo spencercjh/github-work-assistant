@@ -116,7 +116,7 @@ func (s *Store) SaveForkCollaboration(ctx context.Context, key, round, version s
 		if json.Unmarshal([]byte(body), &snapshot) != nil {
 			return errors.New("invalid project snapshot")
 		}
-		payload := canonical(map[string]any{"event_id": eventID, "resource_key": key, "version": version, "data_classification": snapshot.Classification, "subject": subjectOf(snapshot), "kind": "collaboration.updated", "collaboration_id": next.ID, "origin_task": origin, "changes": []Change{}})
+		payload := canonical(map[string]any{"event_id": eventID, "resource_key": key, "version": version, "data_classification": snapshot.Classification, "subject": subjectOf(snapshot), "kind": "collaboration.updated", "collaboration_id": next.ID, "origin_task": origin, "fork_batch": next.ID, "fork_pr": p.PR, "changes": []Change{}})
 		if err = tx.Upsert(ctx, &eventRecord{EventID: eventID, ResourceKey: key, VersionHash: version, Payload: string(payload), State: "pending", CreatedAt: time.Now().Unix()}, []string{"event_id"}, nil); err != nil {
 			return err
 		}

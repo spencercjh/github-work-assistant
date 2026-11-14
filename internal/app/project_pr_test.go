@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ func prDiscussionItem(t *testing.T, s *Service, p ForkProgress) ForkWorkItem {
 		t.Fatal(err)
 	}
 	for _, item := range c.Items {
-		if item.PRDiscussion {
+		if item.PRDiscussion && item.PR == p.PR {
 			return item
 		}
 	}
@@ -191,6 +192,10 @@ func TestProjectPRTaskExpiryAndPrivacy(t *testing.T) {
 	if err = json.Unmarshal([]byte(raw), &pending); err != nil {
 		t.Fatal(err)
 	}
+	q.prs[p.Branch].closed = true
+	if err = s.Collect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	pending.CreatedAt = time.Now().Add(-24 * time.Hour).Unix()
 	if err = store.PutMeta(t.Context(), key, string(canonical(pending))); err != nil {
 		t.Fatal(err)
@@ -217,4 +222,145 @@ func currentForkInputWithoutDelivery(t *testing.T, s *Service) (WorkInput, WorkC
 	}
 	t.Fatal("no fork event")
 	return WorkInput{}, WorkContext{}
+}
+
+func TestProjectClosedPRTaskCannotAuthorizeOrReceiveReplacement(t *testing.T) {
+	s, q, _, after := newQueueFixture(t)
+	s.Config.Forks[0].Channel = "#github-work"
+	api := newProjectAPI(t, s)
+	appendQueue(t, s, after)
+	first := publishQueue(t, s, q)
+	old := prDiscussionItem(t, s, first)
+	state := api.tasks[old.Task.MessageID]
+	state.Owner = "reviewer"
+	api.tasks[old.Task.MessageID] = state
+	_, before := queueInput(t, s)
+	delayed, err := s.Store.RequestWork(t.Context(), before.Event.Key, before.CurrentVersion, projectReport, "Review old PR before replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.prs[first.Branch].closed = true
+	in, w := queueInput(t, s)
+	if _, err := s.RebuildForkBatch(t.Context(), ForkQueueInput{WorkInput: in, Batch: w.Fork.BatchID}); err != nil {
+		t.Fatal(err)
+	}
+	replacement := publishQueue(t, s, q)
+	if replacement.PR == first.PR {
+		t.Fatal("fixture did not replace PR")
+	}
+	newItem := prDiscussionItem(t, s, replacement)
+	if newItem.Task.MessageID == old.Task.MessageID {
+		t.Fatal("replacement reused old PR task")
+	}
+	in, _ = queueInput(t, s)
+	oldContext, err := s.WorkContextFor(t.Context(), in.EventID, "", old.Task.MessageID)
+	if err == nil && oldContext.Fork.PR == replacement.PR {
+		t.Errorf("closed PR %d task now authorizes context for replacement PR %d", first.PR, replacement.PR)
+	}
+	reviewer := in
+	reviewer.TaskID, reviewer.Executor = old.Task.MessageID, "@reviewer"
+	if _, linkErr := s.LinkTask(t.Context(), reviewer); linkErr == nil {
+		t.Error("old PR task linked replacement PR")
+	}
+	api.reportTask, api.reportAuthor = old.Task.MessageID, "reviewer"
+	if err = s.RecordContribution(t.Context(), ContributionInput{WorkInput: reviewer, ReportID: projectReport, Outcome: "approved", Summary: "Old PR task cannot approve its replacement", Head: replacement.ValidatedHead, Base: replacement.ValidatedBase}); err == nil {
+		t.Error("old PR task approved replacement PR")
+	}
+	newState := api.tasks[newItem.Task.MessageID]
+	newState.Owner = "reviewer"
+	api.tasks[newItem.Task.MessageID] = newState
+	newReviewer := participantInput(t, s, in.EventID, newItem.Task.MessageID, "@reviewer")
+	api.reportTask = newItem.Task.MessageID
+	if err = s.RecordContribution(t.Context(), ContributionInput{WorkInput: newReviewer, ReportID: projectReport, Outcome: "approved", Summary: "Review the replacement in its own task", Head: replacement.ValidatedHead, Base: replacement.ValidatedBase}); err != nil {
+		t.Fatal("replacement task could not approve its own PR", err)
+	}
+	q.prs[replacement.Branch].check = "failure"
+	if err = s.Collect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.WorkContext(t.Context(), in.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := s.Store.Event(t.Context(), w.CurrentEventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliverEvent(t, s, ev)
+	if api.sends["github-participant:"+ev.ID+":"+newItem.Task.MessageID] == "" {
+		t.Error("replacement did not receive its CI update")
+	}
+	if msg := api.sends["github-participant:"+ev.ID+":"+old.Task.MessageID]; msg != "" {
+		t.Errorf("replacement PR CI update was delivered to closed PR task: %s", msg)
+	}
+	deliverEvent(t, s, delayed)
+	if api.sends["github-participant:"+delayed.ID+":"+newItem.Task.MessageID] != "" {
+		t.Error("delayed old PR event reached replacement task")
+	}
+	if api.sends["github-participant:"+delayed.ID+":"+old.Task.MessageID] == "" {
+		t.Error("old PR lost its delayed notification")
+	}
+}
+
+func TestProjectLostPRTaskResponseRecoversAfterClosure(t *testing.T) {
+	for _, archived := range []bool{false, true} {
+		t.Run(fmt.Sprintf("archived=%t", archived), func(t *testing.T) {
+			s, q, _, after := newQueueFixture(t)
+			s.Config.Forks[0].Channel = "#github-work"
+			api := newProjectAPI(t, s)
+			appendQueue(t, s, after)
+			p, ws, _ := portQueue(t, s, q)
+			q.prs[p.Branch] = &queueRemote{number: 101, head: ws.Head, base: p.TargetBranch, baseSHA: p.InitialTarget, check: "success"}
+			if err := s.Collect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			_, w := currentForkInputWithoutDelivery(t, s)
+			ev, err := s.Store.Event(t.Context(), w.CurrentEventID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			api.lostPRTask = true
+			if _, err = s.Raft.Send(t.Context(), ev); err == nil {
+				t.Fatal("expected lost response")
+			}
+			key := projectPRTaskKey(ev.Key, "#github-work", 101)
+			if api.prRoots[key] == "" {
+				t.Fatal("task was not created")
+			}
+			q.prs[p.Branch].closed = true
+			if err = s.Collect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if archived {
+				current, err := s.Store.ForkProgress(t.Context(), ev.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				current.Queue.Batches = nil
+				if err = s.Store.SaveForkProgress(t.Context(), ev.Key, current.Revision, current, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			deliverEvent(t, s, ev)
+			var raw string
+			if err = s.Store.(*Store).db.QueryRowContext(t.Context(), "SELECT value FROM ghraft_meta WHERE name=?", key).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var saved projectPRTask
+			if err = json.Unmarshal([]byte(raw), &saved); err != nil {
+				t.Fatal(err)
+			}
+			if len(api.prRoots) != 1 {
+				t.Fatal("recovery duplicated task")
+			}
+			if saved.Task == nil {
+				t.Fatal("event accepted but remotely created PR task receipt remains unresolved after PR closes")
+			}
+			c, err := s.Store.ForkCollaboration(t.Context(), ev.Key, saved.Batch, saved.Channel)
+			if err != nil || c.item(saved.Task.MessageID) == nil || c.item(saved.Task.MessageID).PR != 101 {
+				t.Fatal("confirmed receipt lost its PR-scoped binding", c, err)
+			}
+		})
+	}
 }
