@@ -129,6 +129,37 @@ def material(context):
     return result
 
 
+def bookkeeping_event(previous, current):
+    """A new request can carry instructions without changing the snapshot."""
+    old, new = previous["event"], current["event"]
+    if new["event_id"] == old["event_id"]:
+        return new.get("payload") == old.get("payload")
+    payload = new.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    shared = {"event_id", "resource_key", "version", "data_classification",
+              "subject", "fork_batch", "fork_pr", "changes"}
+    if payload.get("kind") == "collaboration.updated":
+        # Scope, actors and results are compared separately by material().
+        return set(payload) <= shared | {"kind", "collaboration_id", "origin_task"} and payload.get("changes") == []
+    if set(payload) - (shared | {"previous_version", "first_observation", "github_ended"}):
+        return False  # Includes work.requested, new kinds and unknown fields.
+    if payload.get("first_observation") is not False or payload.get("previous_version") != previous["current_version"]:
+        return False
+    changes = payload.get("changes")
+    if not isinstance(changes, list) or len(changes) != 1:
+        return False
+    change = changes[0]
+    if set(change) != {"object", "kind", "before", "after"} or change["object"] != "fork" or change["kind"] != "changed":
+        return False
+    before, after = copy.deepcopy(change["before"]), copy.deepcopy(change["after"])
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    before.pop("wake", None)
+    after.pop("wake", None)
+    return before == after
+
+
 def capture(runner, project, event, task, executor, batch="", previous=None):
     identity = ["--task", task, "--executor", executor]
     scope = ["--batch", batch] if batch else []
@@ -143,7 +174,7 @@ def capture(runner, project, event, task, executor, batch="", previous=None):
     check_project(context, project)
     if context.get("stale") or context["event"]["state"] != "accepted":
         raise WorkflowError("current event is not fresh and delivered; inspect delivery status before capturing again")
-    if previous is not None and material(previous) != material(context):
+    if previous is not None and (material(previous) != material(context) or not bookkeeping_event(previous, context)):
         raise WorkflowError("material context changed; read new feedback, source/target, proof and guidance before making a new report (old context retained)")
     runner("verify-claim", ["--event", current, *identity, *scope])
     session = {"schema": 1, "project": project, "task": task,

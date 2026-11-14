@@ -44,6 +44,17 @@ def session():
             "context": context()}
 
 
+def wake_event(current):
+    before = copy.deepcopy(current["snapshot"]["objects"]["fork"])
+    after = copy.deepcopy(before)
+    after["wake"] += 1
+    current["event"].update(event_id="event-2", payload={
+        "event_id": "event-2", "first_observation": False, "previous_version": "version-1",
+        "changes": [{"object": "fork", "kind": "changed", "before": before, "after": after}],
+    })
+    current["current_event_id"] = "event-2"
+
+
 class FakeRunner:
     def __init__(self, current=None, failures=0):
         self.current = current or context()
@@ -94,8 +105,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_wake_only_retry_reuses_report_and_summary(self):
         current = context()
+        wake_event(current)
         current["current_version"] = "version-2"
-        current["event"]["event_id"] = current["current_event_id"] = "event-2"
         current["snapshot"]["objects"]["fork"]["wake"] = 1
         current["fork"].update(wake=1, revision=2, next_attempt=123, retries=1)
         current["collaboration"]["revision"] = 2
@@ -109,6 +120,33 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("some file", args)
         self.assertIn("event-2", runner.reports()[1][1])
         self.assertEqual(len(saved), 1)
+
+    def test_request_and_unknown_event_semantics_stop_retry(self):
+        for payload in ({"kind": "work.requested", "reason": "Investigate a new failure", "changes": []},
+                        {"kind": "new.directive", "changes": []}, None):
+            current = context()
+            wake_event(current)
+            current["event"]["payload"] = payload
+            runner = FakeRunner(current, failures=1)
+            with self.assertRaisesRegex(work.WorkflowError, "material context changed"):
+                work.execute(runner, session(), "record-work-result", [], True)
+            self.assertEqual(len(runner.reports()), 1)
+            self.assertNotIn("link-task", [c for c, _ in runner.calls])
+        current = context()
+        wake_event(current)
+        current["event"]["payload"]["new_instructions"] = "Stop and investigate"
+        self.assertFalse(work.bookkeeping_event(context(), current))
+
+    def test_collaboration_bookkeeping_and_changed_delta(self):
+        current = context()
+        current["event"].update(event_id="event-2", payload={"kind": "collaboration.updated", "changes": [],
+                                                         "collaboration_id": "batch-1", "origin_task": "task-1"})
+        runner = FakeRunner(current, failures=1)
+        work.execute(runner, session(), "record-work-result", [], True)
+        self.assertEqual(len(runner.reports()), 2)
+        wake_event(current)
+        current["event"]["payload"]["changes"][0]["before"]["target_sha"] = "d" * 40
+        self.assertFalse(work.bookkeeping_event(context(), current))
 
     def test_remote_head_takes_precedence_over_an_old_proof(self):
         value = session()
