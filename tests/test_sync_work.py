@@ -103,12 +103,9 @@ class WorkflowTests(unittest.TestCase):
             work.execute(runner, session(), "record-contribution", ["--base", OLD_BASE])
         self.assertEqual(len(runner.reports()), 1)
 
-    def test_wake_only_retry_reuses_report_and_summary(self):
+    def test_same_event_retry_reuses_report_and_summary(self):
         current = context()
-        wake_event(current)
-        current["current_version"] = "version-2"
-        current["snapshot"]["objects"]["fork"]["wake"] = 1
-        current["fork"].update(wake=1, revision=2, next_attempt=123, retries=1)
+        current["fork"].update(revision=2, next_attempt=123, retries=1)
         current["collaboration"]["revision"] = 2
         current["collaboration"]["items"][0]["link"] = {"version": "version-2"}
         runner = FakeRunner(current, failures=1)
@@ -118,7 +115,7 @@ class WorkflowTests(unittest.TestCase):
         for _, args in runner.reports():
             self.assertIn("report-1", args)
             self.assertIn("some file", args)
-        self.assertIn("event-2", runner.reports()[1][1])
+        self.assertIn("event-1", runner.reports()[1][1])
         self.assertEqual(len(saved), 1)
 
     def test_request_and_unknown_event_semantics_stop_retry(self):
@@ -135,18 +132,21 @@ class WorkflowTests(unittest.TestCase):
         current = context()
         wake_event(current)
         current["event"]["payload"]["new_instructions"] = "Stop and investigate"
-        self.assertFalse(work.bookkeeping_event(context(), current))
+        self.assertNotEqual(work.material(context()), work.material(current))
 
-    def test_collaboration_bookkeeping_and_changed_delta(self):
-        current = context()
-        current["event"].update(event_id="event-2", payload={"kind": "collaboration.updated", "changes": [],
-                                                         "collaboration_id": "batch-1", "origin_task": "task-1"})
-        runner = FakeRunner(current, failures=1)
-        work.execute(runner, session(), "record-work-result", [], True)
-        self.assertEqual(len(runner.reports()), 2)
-        wake_event(current)
-        current["event"]["payload"]["changes"][0]["before"]["target_sha"] = "d" * 40
-        self.assertFalse(work.bookkeeping_event(context(), current))
+    def test_new_wake_or_collaboration_event_requires_reading(self):
+        # A hidden request may precede either visible event; both must stop.
+        for kind in ("wake", "collaboration.updated"):
+            current = context()
+            wake_event(current)
+            if kind != "wake":
+                current["event"]["payload"] = {"kind": kind, "changes": [],
+                                                "collaboration_id": "batch-1", "origin_task": "task-1"}
+            runner = FakeRunner(current, failures=1)
+            with self.assertRaisesRegex(work.WorkflowError, "material context changed"):
+                work.execute(runner, session(), "record-work-result", [], True)
+            self.assertEqual(len(runner.reports()), 1)
+            self.assertNotIn("link-task", [c for c, _ in runner.calls])
 
     def test_remote_head_takes_precedence_over_an_old_proof(self):
         value = session()
