@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -420,9 +422,10 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 		}
 	}
 	// Tests may outlive the evidence freshness window or an automatic retry.
-	// Only a retry wake may differ; all source facts and authority stay bound
-	// to the inputs accepted before running the regression commands.
-	testedSnapshot := w.Snapshot
+	// Queue siblings may receive CI and review feedback while this tree is
+	// tested. Source/dependency facts and live authority remain pinned; writes
+	// still require the complete, current observation after saving the proof.
+	testedSnapshot := forkTestSnapshot(w)
 	w, err = s.RefreshWorkContext(ctx, in.EventID)
 	if err != nil {
 		return result, err
@@ -430,7 +433,7 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	if err = s.checkWorkAuthority(ctx, &w, in, "test"); err != nil {
 		return result, err
 	}
-	if !forkTestEvidenceMatches(testedSnapshot, w.Snapshot) {
+	if !forkTestEvidenceMatches(testedSnapshot, forkTestSnapshot(w)) {
 		return result, ErrStaleWork
 	}
 	if err = requireForkWork(w, in); err != nil {
@@ -461,6 +464,53 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	return result, nil
 }
 
+// Only the in-memory test comparison uses this projection. Persisted snapshots,
+// event versions and write checks retain every PR's complete feedback. A sibling
+// report or successful CI completion does not change the tree under test, while
+// queueWorkAllowed still rejects failed or closed predecessors after refresh.
+func forkTestSnapshot(w WorkContext) []byte {
+	if w.Fork == nil || w.Fork.Queue == nil {
+		return w.Snapshot
+	}
+	var snapshot Snapshot
+	if json.Unmarshal(w.Snapshot, &snapshot) != nil {
+		return w.Snapshot
+	}
+	for _, batch := range w.Fork.Queue.Batches {
+		if batch.Progress.BatchID == w.Fork.BatchID {
+			continue
+		}
+		entry := snapshot.Objects["queue:"+batch.Progress.BatchID]
+		if entry == nil {
+			continue
+		}
+		// Snapshot and progress are read separately. Do not project a newer
+		// observation over an older snapshot during concurrent collection.
+		if entry["evidence"] != hash(canonical(batch.Observation)) {
+			return w.Snapshot
+		}
+		var observation ForkObservation
+		if json.Unmarshal(canonical(batch.Observation), &observation) != nil {
+			return w.Snapshot
+		}
+		for key := range observation.Objects {
+			kind, _, _ := strings.Cut(key, ":")
+			if (kind == "review" || kind == "timeline") && strings.EqualFold(str(observation.Objects[key]["state"]), "CHANGES_REQUESTED") {
+				continue
+			}
+			if slices.Contains([]string{"check", "status", "comment", "review", "review_comment", "timeline"}, kind) {
+				delete(observation.Objects, key)
+			}
+		}
+		pull := observation.Objects["pull"]
+		if pull["mergeable"] == true && pull["conflict_status"] == "clean" && slices.Contains([]string{"clean", "unstable", "blocked", "has_hooks"}, str(pull["mergeable_state"])) {
+			delete(pull, "mergeable_state")
+		}
+		entry["evidence"] = hash(canonical(observation))
+	}
+	return canonical(snapshot)
+}
+
 func forkTestEvidenceMatches(tested, current []byte) bool {
 	var before, after Snapshot
 	if json.Unmarshal(tested, &before) != nil || json.Unmarshal(current, &after) != nil {
@@ -472,7 +522,7 @@ func forkTestEvidenceMatches(tested, current []byte) bool {
 		return false
 	}
 	// Validation itself changes the selected batch phase. Remote/dependency
-	// evidence remains compared in full, including every predecessor.
+	// evidence remains compared after the test-specific feedback projection.
 	if id := str(before.Objects["fork"]["batch_id"]); id != "" {
 		for _, snap := range []*Snapshot{&before, &after} {
 			delete(snap.Objects["queue:"+id], "phase")
