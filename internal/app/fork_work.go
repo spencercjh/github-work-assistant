@@ -247,6 +247,9 @@ func (s *Service) recordForkResult(ctx context.Context, w WorkContext, in WorkRe
 	case "needs-decision":
 		p.Phase, p.NextAttempt = "needs-decision", 0
 	}
+	if s.Config.Project(w.Event.Key) {
+		p.WorkStatus = &ForkWorkStatus{Channel: s.Config.DeliveryTargetFor(w.Event.Key), Batch: collaborationID(&p), PR: p.PR, Result: in}
+	}
 	return s.Store.SaveForkProgress(ctx, w.Event.Key, w.Fork.Revision, p, &in)
 }
 

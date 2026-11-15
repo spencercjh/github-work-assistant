@@ -345,7 +345,11 @@ func (s *Service) registerWorkActions(m *http.ServeMux) {
 			workError(w, err)
 			return
 		}
-		ok(w, map[string]any{"recorded": true, "raft_task_status_changed": false, "verification": "executor-reported result; merged outcomes also require captured merged PR state"})
+		response := map[string]any{"recorded": true, "raft_task_status_changed": false, "verification": "executor-reported result; merged outcomes also require captured merged PR state"}
+		if in.Outcome == "merged" && !in.ReviewOnly {
+			response["next_action"] = "For project PR tasks, run finish-work from the current coordinator's CLI; this HTTP request does not change task status."
+		}
+		ok(w, response)
 	}))
 }
 func workError(w http.ResponseWriter, err error) {

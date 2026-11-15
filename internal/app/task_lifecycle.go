@@ -95,8 +95,9 @@ func (s *Store) CompletionReady(ctx context.Context, key, currentEvent string, t
 }
 
 type TaskFinish struct {
-	Task   TaskDispatch `json:"task"`
-	Status string       `json:"status"`
+	Task    TaskDispatch `json:"task"`
+	Status  string       `json:"status"`
+	PRTasks []TaskFinish `json:"pr_tasks,omitempty"`
 }
 
 // FinishWork is invoked by the executor. Its update callback uses that
@@ -127,6 +128,12 @@ func (s *Service) FinishWork(ctx context.Context, in WorkInput, update func(cont
 	}
 	if w.Fork != nil && state.Status != "in_progress" {
 		return result, ErrClaimUnavailable
+	}
+	if s.Config.Project(w.Event.Key) {
+		// Unrelated queue events must not prevent closing a previously verified
+		// merged PR. Its durable completion intent supplies the exact PR scope.
+		closed, err := s.CompleteMergedPRTasks(ctx, in, update)
+		return TaskFinish{Task: root, Status: "in_progress", PRTasks: closed}, err
 	}
 	w, err = s.RefreshWorkContext(ctx, in.EventID)
 	if err != nil {

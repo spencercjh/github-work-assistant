@@ -241,6 +241,15 @@ func (r *Raft) sendParticipantUpdate(ctx context.Context, ev Event, p ForkProgre
 	if item.PRDiscussion {
 		d.Request.Content = fmt.Sprintf("%s 有更新。\n\n%s 请在本 PR 的固定讨论区核对提交、CI 及评审变化。用户邀请的其他 agent 可以直接在这里 review 和回复，不接管项目同步任务；正式评审结果仍须使用实际任务归属和当前提交证明。PR 已结束时保留原任务记录，不自动重开或另建任务。\n\n事件 ID：%s\n证据版本：%s\n任务：%s", subject, owner, ev.ID, ev.Version, item.Task.MessageID)
 	}
+	var statusPayload struct {
+		Status *ForkWorkStatus `json:"work_status"`
+	}
+	if !hideMetadata && json.Unmarshal(ev.Payload, &statusPayload) == nil && statusPayload.Status != nil {
+		status := statusPayload.Status
+		if status.Channel == item.Task.Channel && status.Batch == strings.TrimPrefix(scope, prefix) && status.PR == p.PR {
+			d.Request.Content += projectStatusMessage(*status)
+		}
+	}
 	if state.Status == "closed" || state.Status == "done" || state.OwnerType == "user" {
 		d.Request.Content += "\n本任务当前已结束或由用户负责，此通知不恢复任务状态或授予执行权限。"
 	}
