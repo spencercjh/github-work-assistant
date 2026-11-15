@@ -142,6 +142,7 @@ func (c Config) validateForks() error {
 // Only progress needed to recover is persisted. Source and review bodies remain
 // in the current snapshot, while old reports follow ordinary retention rules.
 type ForkProgress struct {
+	WorkStatus         *ForkWorkStatus `json:"work_status,omitempty"`
 	GenerationAt       int64           `json:"generation_at,omitempty"`
 	IntegrationBase    string          `json:"integration_base,omitempty"`
 	Queue              *ForkQueueState `json:"queue,omitempty"`

@@ -322,13 +322,7 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 	case "restart-sync":
 		result, err = svc.RestartFork(ctx, in)
 	case "finish-work":
-		result, err = svc.FinishWork(ctx, in, func(ctx context.Context, task app.TaskDispatch, status string) error {
-			cmd := exec.CommandContext(ctx, "raft", "task", "update", "--target", task.Channel, "--number", strconv.Itoa(task.Number), "--status", status)
-			// Inherit the calling executor's identity and unread-message guard.
-			// Do not substitute the collector's shared external credential.
-			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-			return cmd.Run()
-		})
+		result, err = svc.FinishWork(ctx, in, updateRaftTask)
 	case "adopt-discussion":
 		result, err = svc.AdoptDiscussion(ctx, in.EventID, in.TaskID)
 	case "discussion-candidates":
@@ -361,6 +355,15 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 		if err == nil {
 			err = svc.RecordWorkResult(ctx, app.WorkResult{ReviewOnly: *reviewOnly, WorkInput: in, ReportID: *report, Outcome: *outcome, Summary: string(summary)})
 			result = map[string]bool{"recorded": err == nil}
+			if err == nil && *outcome == "merged" && !*reviewOnly {
+				closed, finishErr := svc.CompleteMergedPRTasks(ctx, in, updateRaftTask)
+				response := map[string]any{"recorded": true, "pr_tasks": closed}
+				if finishErr != nil {
+					response["task_completion_pending"] = finishErr.Error()
+					response["next_action"] = "Read the PR discussion, then run finish-work as the project coordinator; do not repeat validation or the merge."
+				}
+				result = response
+			}
 		}
 	case "prepare-worktree", "verify-worktree":
 		if _, err = svc.RefreshWorkContext(ctx, in.EventID); err != nil {
@@ -382,6 +385,14 @@ func workCommand(ctx context.Context, svc *app.Service, command string, args []s
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(result)
+}
+
+func updateRaftTask(ctx context.Context, task app.TaskDispatch, status string) error {
+	cmd := exec.CommandContext(ctx, "raft", "task", "update", "--target", task.Channel, "--number", strconv.Itoa(task.Number), "--status", status)
+	// Inherit the calling executor's identity and unread-message guard.
+	// Do not substitute the collector's shared external credential.
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	return cmd.Run()
 }
 func main() {
 	if e := run(); e != nil {

@@ -14,6 +14,8 @@ var ErrNotFound = database.ErrNotFound
 // envelopes, and stale evidence rejection. It deliberately exposes no SQL connection or transaction.
 // A non-SQL implementation can satisfy this interface without changing services.
 type Persistence interface {
+	PendingPRCompletions(context.Context, string) ([]projectPRCompletion, error)
+	ConfirmPRCompletion(context.Context, projectPRCompletion) error
 	ProjectPRTask(context.Context, string, projectPRTask, bool) (projectPRTask, error)
 	PendingProjectPRTasks(context.Context, string) ([]projectPRTask, error)
 	ParticipantDelivery(context.Context, string, string, participantDelivery, bool) (participantDelivery, error)
