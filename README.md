@@ -76,6 +76,10 @@ python3 scripts/smoke-setup.py --database mysql
 
 External Agent 接口按官方 SDK 0.30.0 的契约实现。协议模拟测试不等于真实账号完成登录、收信和处理；部署者应完成快速部署中的实际接收验证。
 
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE) 许可证。
+
 ## 来源
 
 - [Raft External Agents](https://docs.raft.build/developers/sdk/external-agents/)
