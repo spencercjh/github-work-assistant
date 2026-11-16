@@ -324,7 +324,8 @@ func (s *Store) History(ctx context.Context, key string) ([]json.RawMessage, err
 	if e != nil {
 		return nil, e
 	}
-	rows, e = s.db.QueryContext(ctx, `SELECT r.body FROM ghraft_results r JOIN ghraft_events e ON e.event_id=r.event_id WHERE e.resource_key=? ORDER BY r.created_at DESC LIMIT 20`, key)
+	// Report timestamps have second precision; use the full key to break ties.
+	rows, e = s.db.QueryContext(ctx, `SELECT r.body FROM ghraft_results r JOIN ghraft_events e ON e.event_id=r.event_id WHERE e.resource_key=? ORDER BY r.created_at DESC,r.event_id DESC,r.report_id DESC LIMIT 20`, key)
 	if e != nil {
 		return nil, e
 	}
