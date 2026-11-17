@@ -324,7 +324,7 @@ func (s *Service) RestartFork(ctx context.Context, in WorkInput) (ForkProgress, 
 	var snapshot Snapshot
 	_ = json.Unmarshal(w.Snapshot, &snapshot)
 	pull := snapshot.Objects["pull"]
-	legacyMerged := w.Fork.SyncMode == "" && pull["merged"] == true && shaRE.MatchString(str(pull["head"])) && pull["head"] != w.Fork.Upstream && forkFacts(w)["contains_pinned"] == true
+	legacyMerged := w.Fork.SyncMode == "" && w.Fork.ValidatedResolution == nil && pull["merged"] == true && shaRE.MatchString(str(pull["head"])) && pull["head"] != w.Fork.Upstream && forkFacts(w)["contains_pinned"] == true
 	if pull["state"] != "closed" || (pull["merged"] != false && !legacyMerged) {
 		return ForkProgress{}, errors.New("restart requires a closed unmerged PR or explicit retirement of a merged legacy integration head already containing pinned upstream")
 	}

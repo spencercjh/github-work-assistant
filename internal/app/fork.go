@@ -142,6 +142,8 @@ func (c Config) validateForks() error {
 // Only progress needed to recover is persisted. Source and review bodies remain
 // in the current snapshot, while old reports follow ordinary retention rules.
 type ForkProgress struct {
+	ValidatedResolution *SyncMergeResolution `json:"validated_resolution,omitempty"`
+
 	WorkStatus         *ForkWorkStatus `json:"work_status,omitempty"`
 	GenerationAt       int64           `json:"generation_at,omitempty"`
 	IntegrationBase    string          `json:"integration_base,omitempty"`
@@ -250,6 +252,9 @@ func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
 			} else {
 				g.Text += "\n\n" + upstreamQueueInstruction
 			}
+		}
+		if g.SyncMergeResolution != nil {
+			g.Text += "\n\n" + mergeResolutionInstruction
 		}
 		g.Version = ""
 		g.Version = hash(canonical(g))

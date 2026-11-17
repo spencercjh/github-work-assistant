@@ -23,6 +23,7 @@ type RepositoryPolicy struct {
 	ResolveReviewThreads  bool                   `json:"resolve_review_threads,omitempty"`
 	ForkSyncMode          string                 `json:"fork_sync_mode,omitempty"`
 	SyncBranchReplacement *SyncBranchReplacement `json:"sync_branch_replacement,omitempty"`
+	SyncMergeResolution   *SyncMergeResolution   `json:"sync_merge_resolution,omitempty"`
 	Repo                  string                 `json:"repo"`
 	Goal                  string                 `json:"goal"`
 	Mode                  string                 `json:"mode"`
@@ -37,6 +38,7 @@ type RepositoryGuide struct {
 	ResolveReviewThreads  bool                   `json:"resolve_review_threads,omitempty"`
 	ForkSyncMode          string                 `json:"fork_sync_mode,omitempty"`
 	SyncBranchReplacement *SyncBranchReplacement `json:"sync_branch_replacement,omitempty"`
+	SyncMergeResolution   *SyncMergeResolution   `json:"sync_merge_resolution,omitempty"`
 	DecisionMaker         string                 `json:"decision_maker,omitempty"`
 	Repo                  string                 `json:"repo"`
 	Goal                  string                 `json:"goal"`
@@ -79,6 +81,11 @@ func (p RepositoryPolicy) validate() error {
 	if r := p.SyncBranchReplacement; r != nil {
 		if p.Mode != "local-edit" || !seen["push"] || communityReadOnly(p.Repo) || !validBranch(r.Branch) || !strings.HasPrefix(r.Branch, "ghraft/sync/") || !shaRE.MatchString(r.From) || !shaRE.MatchString(r.To) || r.From == r.To {
 			return errors.New("sync branch replacement requires push permission and an exact sync branch/from/to grant")
+		}
+	}
+	if r := p.SyncMergeResolution; r != nil {
+		if p.Mode != "local-edit" || p.ForkSyncMode != "" || communityReadOnly(p.Repo) || !r.valid() {
+			return errors.New("sync merge resolution requires original-upstream local-edit mode and exact upstream/base/head/tree SHAs")
 		}
 	}
 	if !(strings.HasPrefix(p.TaskTarget, "#") || strings.HasPrefix(p.TaskTarget, "dm:@")) || strings.ContainsAny(p.TaskTarget, "\r\n\t ") || strings.Contains(strings.TrimPrefix(p.TaskTarget, "dm:"), ":") {
@@ -154,6 +161,7 @@ func (c Config) RepositoryGuide(repo string) (RepositoryGuide, error) {
 		g.ForkSyncMode = p.ForkSyncMode
 		g.ResolveReviewThreads = p.ResolveReviewThreads
 		g.SyncBranchReplacement = p.SyncBranchReplacement
+		g.SyncMergeResolution = p.SyncMergeResolution
 		g.GitHubActions = append([]string{}, p.GitHubActions...)
 		slices.Sort(g.GitHubActions)
 		if len(g.GitHubActions) > 0 || g.ResolveReviewThreads {
