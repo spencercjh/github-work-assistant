@@ -250,7 +250,11 @@ func (d WorkDefinition) Guide(c Config) (RepositoryGuide, error) {
 			if g.ForkSyncMode == adaptedBatches {
 				g.Text += "\n\n" + forkQueueInstruction
 			} else {
-				g.Text += "\n\n" + upstreamQueueInstruction
+				instruction := upstreamQueueInstruction
+				if g.SyncMergeResolution != nil {
+					instruction = strings.Replace(instruction, "Every PR head must remain the exact original upstream commit.", "By default, every PR head must remain the exact original upstream commit. The only exception is the current trusted guide's sync_merge_resolution when its upstream, current base, head and tree all match.", 1)
+				}
+				g.Text += "\n\n" + instruction
 			}
 		}
 		if g.SyncMergeResolution != nil {
