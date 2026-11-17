@@ -31,7 +31,7 @@ func validForkProofHead(p ForkProgress) bool {
 			return p.ValidatedHead != p.InitialTarget
 		}
 	}
-	return p.SyncMode == "" && p.ValidatedHead == p.Upstream
+	return p.SyncMode == "" && (p.ValidatedHead == p.Upstream || p.ValidatedResolution.matches(p.Upstream, p.ValidatedBase, p.ValidatedHead, p.ValidatedTree))
 }
 
 // Select the oldest next mainline changes. First-parent order preserves merge

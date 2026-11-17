@@ -63,12 +63,13 @@ func restoreForkProof(current, archived ForkProgress) ForkProgress {
 	current.ValidatedHead, current.ValidatedBase = archived.ValidatedHead, archived.ValidatedBase
 	current.ValidatedTree, current.ValidatedGuide = archived.ValidatedTree, archived.ValidatedGuide
 	current.ValidatedMapping, current.ValidatedPRSection = archived.ValidatedMapping, archived.ValidatedPRSection
+	current.ValidatedResolution = archived.ValidatedResolution
 	current.TestLog, current.TestLogHash = archived.TestLog, archived.TestLogHash
 	return current
 }
 
 func sameForkProof(a, b ForkProgress) bool {
-	return a.ValidatedHead == b.ValidatedHead && a.ValidatedBase == b.ValidatedBase && a.ValidatedTree == b.ValidatedTree && a.ValidatedGuide == b.ValidatedGuide && a.ValidatedMapping == b.ValidatedMapping && a.ValidatedPRSection == b.ValidatedPRSection && a.TestLog == b.TestLog && a.TestLogHash == b.TestLogHash
+	return a.ValidatedHead == b.ValidatedHead && a.ValidatedBase == b.ValidatedBase && a.ValidatedTree == b.ValidatedTree && a.ValidatedGuide == b.ValidatedGuide && a.ValidatedMapping == b.ValidatedMapping && a.ValidatedPRSection == b.ValidatedPRSection && string(canonical(a.ValidatedResolution)) == string(canonical(b.ValidatedResolution)) && a.TestLog == b.TestLog && a.TestLogHash == b.TestLogHash
 }
 
 // Unlike a credential file, an archive/log must retain its exact bytes.

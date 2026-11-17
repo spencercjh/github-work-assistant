@@ -105,7 +105,14 @@ func (s *Service) prepareForkWorkspace(ctx context.Context, w WorkContext, in Wo
 		return Workspace{}, err
 	}
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		args := []string{"worktree", "add", "--detach", path, p.Upstream}
+		head := p.Upstream
+		if r := w.Guide.SyncMergeResolution; p.SyncMode == "" && r != nil && r.Upstream == p.Upstream && r.Base == str(forkFacts(w)["target_sha"]) {
+			if err = verifyMergeResolution(ctx, repository, r, p.Upstream, r.Base, r.Head); err != nil {
+				return Workspace{}, err
+			}
+			head = r.Head
+		}
+		args := []string{"worktree", "add", "--detach", path, head}
 		if p.SyncMode == adaptedBatches {
 			args = []string{"worktree", "add", "-b", forkLocalBranch(p), path, p.InitialTarget}
 		}
@@ -178,7 +185,9 @@ func (s *Service) verifyForkWorkspace(ctx context.Context, w WorkContext, in Wor
 			return workspace, errors.New("adapted source must retain its initial target history")
 		}
 	} else if head != p.Upstream {
-		return workspace, errors.New("source worktree must contain the exact pinned upstream commit without integration commits")
+		if err := verifyMergeResolution(ctx, path, w.Guide.SyncMergeResolution, p.Upstream, str(forkFacts(w)["target_sha"]), head); err != nil {
+			return workspace, err
+		}
 	}
 	workspace.Head = head
 	if err = cleanCommitted(ctx, path); err != nil {
@@ -187,6 +196,9 @@ func (s *Service) verifyForkWorkspace(ctx context.Context, w WorkContext, in Wor
 	workspace.WorkInput, workspace.Base, workspace.TestCommands = in, str(forkFacts(w)["target_sha"]), w.Guide.TestCommands
 	workspace.Conflicts = []string{}
 	workspace.Verification = "Source is the exact pinned upstream commit. test-worktree validates a separate temporary merge with the current target; push only this source HEAD to the returned branch."
+	if p.SyncMode == "" && head != p.Upstream {
+		workspace.Verification = "Source is the exact operator-authorized resolution merge, preserving the pinned upstream history. test-worktree must validate this head against the authorized current target; push only this HEAD to the returned branch."
+	}
 	if p.SyncMode == adaptedBatches {
 		workspace.MappingFile = metadata + ".commits.json"
 		workspace.Verification = "Adapted source retains the initial target. " + adaptedProvenanceInstruction
@@ -316,6 +328,7 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	}
 	p.ValidatedHead, p.ValidatedBase, p.ValidatedTree, p.ValidatedGuide, p.TestLog, p.TestLogHash = "", "", "", "", "", ""
 	p.ValidatedMapping, p.ValidatedPRSection = "", ""
+	p.ValidatedResolution = nil
 	now := time.Now()
 	p.Validation = &ForkValidation{Executor: in.Executor, TaskID: in.TaskID, ID: result.Attempt, Round: p.Round, Head: result.Head, Base: result.Base, Guide: in.GuideVersion, Log: result.Log, State: "running", StartedAt: now.Unix(), HeartbeatAt: now.Unix(), Deadline: now.Add(forkTestTimeout + forkTestLease).Unix()}
 	// Starting validation resumes execution, even after an earlier review wait.
@@ -363,6 +376,15 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	result.Tree, err = forkTestTree(ctx, testPath, result.Base)
 	if err != nil {
 		return result, err
+	}
+	var resolution *SyncMergeResolution
+	if p.SyncMode == "" && result.Head != p.Upstream {
+		r := w.Guide.SyncMergeResolution
+		if !r.matches(p.Upstream, result.Base, result.Head, result.Tree) {
+			return result, errors.New("prospective merge tree differs from the authorized resolution")
+		}
+		copy := *r
+		resolution = &copy
 	}
 	home, err := os.MkdirTemp(s.Config.WorkspaceRoot, "test-home-")
 	if err != nil {
@@ -448,6 +470,7 @@ func (s *Service) TestWorkspace(ctx context.Context, in WorkInput) (result Works
 	}
 	p.ValidatedHead, p.ValidatedBase, p.ValidatedTree, p.ValidatedGuide, p.TestLog, p.TestLogHash = result.Head, result.Base, result.Tree, in.GuideVersion, result.Log, result.LogHash
 	p.ValidatedMapping, p.ValidatedPRSection = mappingHash, prSection
+	p.ValidatedResolution = resolution
 	if p.SyncMode == adaptedBatches {
 		result.PRBodyFile = metadata + ".pr-body.md"
 		if err = os.WriteFile(result.PRBodyFile, []byte(prSection+"\n"), 0600); err != nil {

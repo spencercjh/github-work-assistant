@@ -496,6 +496,7 @@ func (s *Service) RebuildForkBatch(ctx context.Context, in ForkQueueInput) (Fork
 	next.GenerationAt = time.Now().Unix()
 	next.ValidatedHead, next.ValidatedBase, next.ValidatedTree, next.ValidatedGuide = "", "", "", ""
 	next.ValidatedMapping, next.ValidatedPRSection, next.TestLog, next.TestLogHash = "", "", "", ""
+	next.ValidatedResolution = nil
 	next.NextAttempt = time.Now().Add(4 * time.Hour).Unix()
 	o := b.Observation
 	o.Target = target
